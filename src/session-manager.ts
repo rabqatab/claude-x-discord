@@ -1,4 +1,4 @@
-import { type Message, type ButtonInteraction, type ThreadChannel, AttachmentBuilder } from "discord.js";
+import { type Message, type ButtonInteraction, type ChatInputCommandInteraction, type ThreadChannel, AttachmentBuilder } from "discord.js";
 import { DiscordGateway } from "./discord/client.js";
 import { ForumManager } from "./discord/forum.js";
 import { parseButtonAction, sendApprovalRequest } from "./discord/buttons.js";
@@ -8,6 +8,7 @@ import { SessionsDB } from "./db/sessions.js";
 import { MemoryDB } from "./db/memory.js";
 import { formatForDiscord } from "./formatter/index.js";
 import { type Config, type Env } from "./config/schema.js";
+import { createCommandRegistry, type CommandRegistry } from "./commands/index.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -18,6 +19,7 @@ export class SessionManager {
   private pool: ClaudePool;
   private sessions: SessionsDB;
   private memory: MemoryDB;
+  private commands!: CommandRegistry;
   private pendingApprovals = new Map<string, string>();
 
   constructor(
@@ -47,13 +49,28 @@ export class SessionManager {
   get forumManager(): ForumManager { return this.forum; }
 
   async start(): Promise<void> {
-    this.gateway.on("ready", () => {
+    this.commands = await createCommandRegistry();
+
+    this.gateway.on("ready", async () => {
       console.log("Discord connected");
-      this.forum.init().catch(console.error);
+      await this.forum.init().catch(console.error);
+
+      const clientId = this.gateway.client.user?.id;
+      if (clientId) {
+        await this.commands.deployToGuild(
+          this.env.DISCORD_TOKEN,
+          clientId,
+          this.config.discord.guild_id
+        );
+        console.log("Slash commands deployed");
+      }
     });
 
     this.gateway.on("message", (msg: Message) => this.handleMessage(msg));
     this.gateway.on("button", (btn: ButtonInteraction) => this.handleButton(btn));
+    this.gateway.on("command", (interaction: ChatInputCommandInteraction) =>
+      this.handleCommand(interaction)
+    );
 
     await this.gateway.start();
   }
@@ -173,6 +190,31 @@ export class SessionManager {
       } else {
         proc.deny();
         await interaction.update({ content: "\u274c Denied", components: [] });
+      }
+    }
+  }
+
+  private async handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    const command = this.commands.get(interaction.commandName);
+    if (!command) {
+      await interaction.reply({ content: "Unknown command", ephemeral: true });
+      return;
+    }
+    try {
+      await command.execute(interaction, {
+        sessions: this.sessions,
+        memory: this.memory,
+        pool: this.pool,
+        forum: this.forum,
+        config: this.config,
+      });
+    } catch (err) {
+      console.error(`Command error [${interaction.commandName}]:`, err);
+      const content = "An error occurred while executing that command.";
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content, ephemeral: true }).catch(() => {});
+      } else {
+        await interaction.reply({ content, ephemeral: true }).catch(() => {});
       }
     }
   }
