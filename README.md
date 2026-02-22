@@ -180,6 +180,18 @@ src/
 
 TypeScript | Node.js 22+ | discord.js v14 | better-sqlite3 (WAL + FTS5) | tsup | vitest | Zod
 
+## Special Thanks
+
+This project was heavily influenced by the following projects:
+
+- **[claude-code-telegram](https://github.com/RichardAtCT/claude-code-telegram.git)** by RichardAtCT — SQLite-based session/history storage pattern, multi-layer security middleware chain (auth, rate-limit, audit logging), event bus architecture, and the SDK/CLI dual integration with fallback strategy.
+
+- **[claude_x_telegram](https://github.com/svchk12/claude_x_telegram.git)** by svchk12 — Forum topic-based project management (mapping each project to its own chat thread), dangerous command detection with approval buttons, and session resume pattern.
+
+- **[Claude-Code-Remote](https://github.com/JessyTsui/Claude-Code-Remote.git)** by JessyTsui — Hook-based event capture with minimal coupling, execution trace relay to messaging platforms, command retry queue, and the interactive setup wizard concept.
+
+- **[open-claude-code](https://github.com/ico1036/open-claude-code.git)** by ico1036 — discord.js adapter implementation, message debouncing, Markdown-to-Discord formatting with code block chunking, FTS5 full-text search memory, and the Zod + YAML config pattern. The core TypeScript + tsup + vitest stack was adopted from this project.
+
 ## License
 
 ISC
