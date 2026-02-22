@@ -8,6 +8,7 @@ Supports: claude, gemini, codex
 
 import argparse
 import os
+import pty
 import subprocess
 import sys
 import signal
@@ -82,35 +83,44 @@ def main():
     log(f"cli={args.cli} cwd={args.cwd}")
     log(f"cmd: {cmd[:5]}...")
 
+    # Claude CLI hangs when stdin is an open pipe (waits for EOF before
+    # starting).  Use a PTY so the CLI sees isTTY=true on stdin and proceeds
+    # immediately with the -p prompt.  We keep master_fd to relay approve/deny
+    # input from Node.js later.
+    master_fd, slave_fd = pty.openpty()
+
     proc = subprocess.Popen(
         cmd,
         cwd=args.cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        stdin=subprocess.PIPE,
+        stdin=slave_fd,
         env=env,
     )
+    os.close(slave_fd)  # parent doesn't need the slave end
 
     log(f"spawned pid={proc.pid}")
 
     def handle_signal(sig, frame):
         proc.terminate()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
         sys.exit(0)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    # Relay stdin from parent (Node.js) to child CLI (for approve/deny)
+    # Relay stdin from parent (Node.js) → PTY master → child CLI (approve/deny)
     def relay_stdin():
         try:
             for line in sys.stdin.buffer:
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.write(line)
-                    proc.stdin.flush()
+                try:
+                    os.write(master_fd, line)
                     log(f"stdin relay: {line.decode().strip()[:50]}")
+                except OSError:
+                    break
         except (BrokenPipeError, OSError):
             pass
-        finally:
-            if proc.stdin and not proc.stdin.closed:
-                proc.stdin.close()
 
     stdin_thread = threading.Thread(target=relay_stdin, daemon=True)
     stdin_thread.start()
@@ -134,6 +144,10 @@ def main():
         pass
 
     proc.wait()
+    try:
+        os.close(master_fd)
+    except OSError:
+        pass
     sys.exit(proc.returncode or 0)
 
 
