@@ -32,7 +32,7 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: CommandCon
   await interaction.deferReply();
 
   ctx.pool.kill(project.forum_topic_id);
-  await ctx.forum.archiveTopic(project.forum_topic_id);
+  await ctx.forum.archiveTopic(project.forum_topic_id).catch(() => {});
   ctx.sessions.unregisterProject(project.project_name); // Use actual stored name
 
   await interaction.editReply(`Unregistered project **${project.project_name}** and archived its topic.`);
