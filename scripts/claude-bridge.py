@@ -49,6 +49,16 @@ def build_env(cli):
            if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
     if cli == "claude":
         env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+    # Node.js-based CLIs (gemini, codex) use #!/usr/bin/env node shebang.
+    # Prepend the CLI binary's directory to PATH so `env node` resolves to
+    # the same Node.js version the CLI was installed with (e.g. NVM v22).
+    bin_key = {"gemini": "GEMINI_BIN", "codex": "CODEX_BIN"}.get(cli)
+    if bin_key:
+        bin_path = env.get(bin_key, "")
+        if bin_path:
+            node_dir = os.path.dirname(bin_path)
+            if node_dir:
+                env["PATH"] = node_dir + ":" + env.get("PATH", "")
     return env
 
 

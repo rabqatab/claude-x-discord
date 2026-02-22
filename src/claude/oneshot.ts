@@ -69,41 +69,37 @@ export function runOneShotClaude(
   });
 }
 
-/** Extract result text from Claude stream-json output (copied from debate/runner.ts) */
+/** Extract result text from Claude stream-json output.
+ *  Single-pass collection — returns the most complete content available.
+ */
 function extractClaudeResult(output: string): string {
   const lines = output.split("\n").filter((l) => l.trim());
 
-  // 1) Look for result line (final summary)
-  for (const line of lines) {
-    try {
-      const json = JSON.parse(line);
-      if (json.type === "result" && json.result) return json.result;
-    } catch { /* skip */ }
-  }
-
-  // 2) Collect from content_block_delta (streaming text deltas)
+  let resultText = "";
   let deltaText = "";
+  let assistantText = "";
+
   for (const line of lines) {
     try {
       const json = JSON.parse(line);
+
+      if (json.type === "result" && json.result) {
+        resultText = json.result;
+      }
+
       if (json.type === "content_block_delta" && json.delta?.type === "text_delta") {
         deltaText += json.delta.text;
       }
-    } catch { /* skip */ }
-  }
-  if (deltaText) return deltaText;
 
-  // 3) Fallback: collect assistant message text
-  let text = "";
-  for (const line of lines) {
-    try {
-      const json = JSON.parse(line);
       if (json.type === "assistant" && json.message?.content) {
         for (const part of json.message.content) {
-          if (part.type === "text") text += part.text;
+          if (part.type === "text") assistantText += part.text;
         }
       }
-    } catch { /* skip */ }
+    } catch { /* skip non-JSON lines */ }
   }
-  return text;
+
+  if (deltaText && deltaText.length > resultText.length) return deltaText;
+  if (resultText) return resultText;
+  return assistantText;
 }
