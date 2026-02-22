@@ -83,47 +83,54 @@ def main():
     log(f"cli={args.cli} cwd={args.cwd}")
     log(f"cmd: {cmd[:5]}...")
 
-    # Claude CLI hangs when stdin is an open pipe (waits for EOF before
-    # starting).  Use a PTY so the CLI sees isTTY=true on stdin and proceeds
-    # immediately with the -p prompt.  We keep master_fd to relay approve/deny
-    # input from Node.js later.
-    master_fd, slave_fd = pty.openpty()
+    # Claude CLI hangs when stdin is an open pipe (checks isTTY and waits
+    # for input).  Use a PTY so it sees isTTY=true and proceeds with -p.
+    # Other CLIs (gemini, codex) don't need this — use DEVNULL for them.
+    master_fd = None
+    if args.cli == "claude":
+        master_fd, slave_fd = pty.openpty()
+        stdin_arg = slave_fd
+    else:
+        stdin_arg = subprocess.DEVNULL
 
     proc = subprocess.Popen(
         cmd,
         cwd=args.cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        stdin=slave_fd,
+        stdin=stdin_arg,
         env=env,
     )
-    os.close(slave_fd)  # parent doesn't need the slave end
+    if args.cli == "claude":
+        os.close(slave_fd)  # parent doesn't need the slave end
 
     log(f"spawned pid={proc.pid}")
 
     def handle_signal(sig, frame):
         proc.terminate()
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
         sys.exit(0)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    # Relay stdin from parent (Node.js) → PTY master → child CLI (approve/deny)
-    def relay_stdin():
-        try:
-            for line in sys.stdin.buffer:
-                try:
-                    os.write(master_fd, line)
-                    log(f"stdin relay: {line.decode().strip()[:50]}")
-                except OSError:
-                    break
-        except (BrokenPipeError, OSError):
-            pass
+    # Relay stdin from parent (Node.js) → PTY master → Claude CLI (approve/deny)
+    if master_fd is not None:
+        def relay_stdin():
+            try:
+                for line in sys.stdin.buffer:
+                    try:
+                        os.write(master_fd, line)
+                        log(f"stdin relay: {line.decode().strip()[:50]}")
+                    except OSError:
+                        break
+            except (BrokenPipeError, OSError):
+                pass
 
-    stdin_thread = threading.Thread(target=relay_stdin, daemon=True)
-    stdin_thread.start()
+        stdin_thread = threading.Thread(target=relay_stdin, daemon=True)
+        stdin_thread.start()
 
     # Read stderr in a thread
     def read_stderr():
@@ -144,10 +151,11 @@ def main():
         pass
 
     proc.wait()
-    try:
-        os.close(master_fd)
-    except OSError:
-        pass
+    if master_fd is not None:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
     sys.exit(proc.returncode or 0)
 
 
