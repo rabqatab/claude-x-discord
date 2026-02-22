@@ -1,7 +1,16 @@
-import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from "discord.js";
+import { SlashCommandBuilder, type ChatInputCommandInteraction, AttachmentBuilder } from "discord.js";
 import { type Command, type CommandContext } from "./registry.js";
-import { assembleContext, gatherProjectFacts, runDebate } from "../debate/index.js";
+import { runDebate } from "../debate/index.js";
 import { loadEnv } from "../config/index.js";
+import { splitMessage } from "../formatter/index.js";
+
+const DISCORD_MAX = 2000;
+
+const AI_HEADERS: Record<string, string> = {
+  Claude: "**Claude**",
+  Gemini: "**Gemini**",
+  Codex: "**Codex**",
+};
 
 const data = new SlashCommandBuilder()
   .setName("debate")
@@ -11,41 +20,71 @@ const data = new SlashCommandBuilder()
   ) as SlashCommandBuilder;
 
 async function execute(interaction: ChatInputCommandInteraction, ctx: CommandContext): Promise<void> {
+  // Defer immediately — Discord gives only 3 seconds
+  await interaction.deferReply();
+
   const topicId = interaction.channelId;
   const project = ctx.sessions.getProjectByTopicId(topicId);
 
   if (!project) {
-    await interaction.reply({ content: "This channel is not a registered project topic.", ephemeral: true });
+    await interaction.editReply("This channel is not a registered project topic.");
     return;
   }
 
   const question = interaction.options.getString("question", true);
 
-  await interaction.deferReply();
+  try {
+    const env = loadEnv();
+    const responses = await runDebate(
+      { question, projectPath: project.project_path },
+      ctx.config,
+      env
+    );
 
-  const facts = gatherProjectFacts(project.project_path);
-  const context = assembleContext({
-    projectFacts: facts,
-    claudeSummary: `Project: ${project.project_name} at ${project.project_path}`,
-    question,
-  });
+    // Store debate results as context for follow-up messages
+    const debateSummary = responses
+      .map(r => `=== ${r.ai} ===\n${r.error ? `Error: ${r.error}` : r.response}`)
+      .join("\n\n");
+    ctx.debateContext.set(topicId, `Question: ${question}\n\n${debateSummary}`);
 
-  const env = loadEnv();
-  const responses = await runDebate(context, ctx.config, env);
+    // First message: the question as header
+    const header = `**Debate:** ${question}`;
+    await interaction.editReply(header);
+    const channel = interaction.channel;
+    if (!channel || !("send" in channel)) return;
 
-  const embed = new EmbedBuilder()
-    .setTitle(`Debate: ${question.slice(0, 200)}`)
-    .setColor(0x5865f2)
-    .setTimestamp();
+    // Send each AI's response as regular messages (no embed boxes)
+    for (const r of responses) {
+      const aiHeader = AI_HEADERS[r.ai] || `**${r.ai}**`;
 
-  for (const r of responses) {
-    const value = r.error
-      ? `Error: ${r.error.slice(0, 500)}`
-      : r.response.slice(0, 1000);
-    embed.addFields({ name: r.ai, value: value || "(empty response)" });
+      if (r.error) {
+        await channel.send(`${aiHeader}\nError: ${r.error.slice(0, 1900)}`);
+        continue;
+      }
+
+      const fullText = `${aiHeader}\n${r.response}`;
+      const parts = splitMessage(fullText, DISCORD_MAX);
+
+      // If too many parts (>8), send first 3 + attachment
+      if (parts.length > 8) {
+        for (const part of parts.slice(0, 3)) {
+          await channel.send(part);
+        }
+        const attachment = new AttachmentBuilder(
+          Buffer.from(r.response),
+          { name: `${r.ai.toLowerCase()}-response.md` }
+        );
+        await channel.send({ content: `_... ${r.ai} full response attached_`, files: [attachment] });
+      } else {
+        for (const part of parts) {
+          await channel.send(part);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[debate] error:", err);
+    await interaction.editReply("Debate failed. Check logs for details.").catch(() => {});
   }
-
-  await interaction.editReply({ embeds: [embed] });
 }
 
 export const debateCommand: Command = { data, execute };

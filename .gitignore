@@ -1,6 +1,18 @@
 node_modules/
 dist/
 .env
+.DS_Store
+
+# Database & runtime data
 *.db
 *.db-wal
 *.db-shm
+data/
+
+# Personal data
+config.yaml
+persona/
+docs/usage_report/
+docs/usage-summary-for-claude-x-discord.md
+docs/project-comparison.md
+docs/plans/

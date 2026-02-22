@@ -15,7 +15,7 @@ const data = new SlashCommandBuilder()
     opt.setName("command").setDescription("Command name to get details for").setRequired(false)
   ) as SlashCommandBuilder;
 
-async function execute(interaction: ChatInputCommandInteraction, _ctx: CommandContext): Promise<void> {
+async function execute(interaction: ChatInputCommandInteraction, ctx: CommandContext): Promise<void> {
   const commandName = interaction.options.getString("command");
 
   if (commandName) {
@@ -27,8 +27,9 @@ async function execute(interaction: ChatInputCommandInteraction, _ctx: CommandCo
     return;
   }
 
+  const machine = ctx.config.machine_name;
   const embed = new EmbedBuilder()
-    .setTitle("claude-x-discord Commands")
+    .setTitle(`claude-x-discord [${machine}]`)
     .setColor(0x5865f2);
 
   for (const [category, commands] of Object.entries(categories)) {

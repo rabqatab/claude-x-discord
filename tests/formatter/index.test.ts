@@ -9,8 +9,8 @@ describe("Formatter", () => {
     expect(result.attachment).toBeNull();
   });
 
-  it("creates attachment for long output", () => {
-    const longText = "a".repeat(2500);
+  it("creates attachment for very long output (>5 parts)", () => {
+    const longText = ("line of text here\n").repeat(1000);
     const result = formatForDiscord(longText);
     expect(result.messages[0].length).toBeLessThanOrEqual(2000);
     expect(result.attachment).not.toBeNull();

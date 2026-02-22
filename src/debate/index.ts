@@ -1,2 +1,1 @@
-export { assembleContext, gatherProjectFacts } from "./context.js";
-export { runDebate, type DebateResponse } from "./runner.js";
+export { runDebate, type DebateResponse, type DebateOptions } from "./runner.js";

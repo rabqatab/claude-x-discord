@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const PERSONA_DIR = resolve(
-  process.env.CLAUDE_X_DISCORD_HOME || `${process.env.HOME}/.claude-x-discord`,
+  process.env.CLAUDE_X_DISCORD_HOME || process.cwd(),
   "persona"
 );
 

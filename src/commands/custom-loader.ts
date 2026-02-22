@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { type Command } from "./registry.js";
 
 const CUSTOM_COMMANDS_DIR = resolve(
-  process.env.CLAUDE_X_DISCORD_HOME || `${process.env.HOME}/.claude-x-discord`,
+  process.env.CLAUDE_X_DISCORD_HOME || process.cwd(),
   "commands"
 );
 

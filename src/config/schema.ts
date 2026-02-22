@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const configSchema = z.object({
+  machine_name: z.string().default("local"),
   discord: z.object({
     guild_id: z.string(),
     forum_channel_id: z.string(),
@@ -24,6 +25,9 @@ export const configSchema = z.object({
   memory: z.object({
     auto_learn_interval: z.number().default(10),
     confidence_decay: z.number().default(0.95),
+    facet_interval: z.number().default(10),
+    aggregation_threshold: z.number().default(5),
+    analysis_timeout: z.number().default(120),
   }),
 });
 

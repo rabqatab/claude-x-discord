@@ -3,6 +3,7 @@ import { ClaudeProcess, type ClaudeProcessOptions } from "./process.js";
 export class ClaudePool {
   private processes = new Map<string, ClaudeProcess>();
   private idleTimers = new Map<string, NodeJS.Timeout>();
+  private sessionIds = new Map<string, string>();
 
   constructor(
     private maxProcesses: number,
@@ -13,22 +14,45 @@ export class ClaudePool {
     return this.processes.get(topicId);
   }
 
-  spawn(topicId: string, options: ClaudeProcessOptions): ClaudeProcess {
+  getSessionId(topicId: string): string | undefined {
+    return this.sessionIds.get(topicId);
+  }
+
+  setSessionId(topicId: string, sessionId: string): void {
+    this.sessionIds.set(topicId, sessionId);
+  }
+
+  /** Run a prompt for a given topic. Creates a new ClaudeProcess per message. */
+  run(topicId: string, prompt: string, options: ClaudeProcessOptions): ClaudeProcess {
+    // Kill existing process if still running
+    const existing = this.processes.get(topicId);
+    if (existing?.isAlive) {
+      existing.stop();
+    }
+
     if (this.processes.size >= this.maxProcesses) {
       this.evictOldest();
     }
-    const existing = this.processes.get(topicId);
-    if (existing?.isAlive) {
-      this.resetIdleTimer(topicId);
-      return existing;
-    }
-    const proc = new ClaudeProcess(options);
-    proc.start();
+
+    // Use stored sessionId if available
+    const sessionId = options.sessionId || this.sessionIds.get(topicId);
+    const proc = new ClaudeProcess({
+      ...options,
+      sessionId,
+    });
+
+    proc.on("session", (sid: string) => {
+      this.sessionIds.set(topicId, sid);
+    });
+
+    proc.run(prompt);
     this.processes.set(topicId, proc);
     this.resetIdleTimer(topicId);
+
     proc.on("exit", () => {
       this.clearIdleTimer(topicId);
     });
+
     return proc;
   }
 

@@ -81,6 +81,14 @@ export class MemoryDB {
       CREATE INDEX IF NOT EXISTS idx_conversations_topic_id
       ON conversations(topic_id)
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS analysis_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER DEFAULT (unixepoch())
+      )
+    `);
   }
 
   addMemory(opts: {
@@ -149,6 +157,14 @@ export class MemoryDB {
     stmt.run(id, opts.topicId, opts.role, opts.content);
   }
 
+  getConversationCount(topicId: string): number {
+    const stmt = this.db.prepare(
+      "SELECT COUNT(*) as count FROM conversations WHERE topic_id = ?"
+    );
+    const row = stmt.get(topicId) as { count: number };
+    return row.count;
+  }
+
   getConversationHistory(topicId: string, limit: number): Conversation[] {
     const stmt = this.db.prepare(`
       SELECT * FROM conversations
@@ -157,6 +173,32 @@ export class MemoryDB {
       LIMIT ?
     `);
     return stmt.all(topicId, limit) as Conversation[];
+  }
+
+  getAnalysisState(key: string): string | null {
+    const stmt = this.db.prepare(
+      "SELECT value FROM analysis_state WHERE key = ?"
+    );
+    const row = stmt.get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setAnalysisState(key: string, value: string): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO analysis_state (key, value, updated_at)
+      VALUES (?, ?, unixepoch())
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+    stmt.run(key, value);
+  }
+
+  getConversationsSince(topicId: string, sinceTimestamp: number): Conversation[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM conversations
+      WHERE topic_id = ? AND timestamp > ?
+      ORDER BY timestamp ASC
+    `);
+    return stmt.all(topicId, sinceTimestamp) as Conversation[];
   }
 
   close(): void {

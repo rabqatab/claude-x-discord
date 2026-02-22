@@ -4,7 +4,7 @@ import { SessionsDB } from "../../src/db/sessions.js";
 import { MemoryDB } from "../../src/db/memory.js";
 import { ClaudePool } from "../../src/claude/pool.js";
 import { formatForDiscord } from "../../src/formatter/index.js";
-import { assembleContext } from "../../src/debate/context.js";
+import { assembleApiContext } from "../../src/debate/context.js";
 import { shouldAutoLearn } from "../../src/memory/evolution.js";
 import { parseButtonAction } from "../../src/discord/buttons.js";
 
@@ -42,12 +42,12 @@ describe("Integration smoke test", () => {
     expect(output.messages[0]).toBe("Hello from Claude");
     expect(output.attachment).toBeNull();
 
-    const longOutput = formatForDiscord("x".repeat(2500));
+    const longOutput = formatForDiscord(("line of text here\n").repeat(1000));
     expect(longOutput.attachment).not.toBeNull();
 
     // Debate context
-    const ctx = assembleContext({
-      projectFacts: { tree: "src/", dependencies: "{}", readme: "# Test" },
+    const ctx = assembleApiContext({
+      projectFacts: { tree: "src/", dependencies: "{}", readme: "# Test", sourceFiles: "" },
       claudeSummary: "A test project",
       question: "Redis vs SQLite?",
     });

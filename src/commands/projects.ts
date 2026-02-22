@@ -19,8 +19,9 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: CommandCon
     return;
   }
 
+  const machine = ctx.config.machine_name;
   const embed = new EmbedBuilder()
-    .setTitle("Registered Projects")
+    .setTitle(`Registered Projects [${machine}]`)
     .setColor(0x5865f2)
     .setDescription(
       projects

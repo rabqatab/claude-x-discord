@@ -1,5 +1,4 @@
 const DISCORD_MAX = 2000;
-const PREVIEW_LENGTH = 1500;
 
 const TOOL_ICONS: Record<string, string> = {
   Edit: "\u270f\ufe0f",
@@ -17,20 +16,55 @@ export interface FormattedOutput {
 }
 
 export function formatForDiscord(text: string): FormattedOutput {
-  const formatted = formatToolUsage(text);
+  let formatted = formatToolUsage(text);
+  formatted = convertTablesForDiscord(formatted);
+  formatted = cleanForDiscord(formatted);
 
-  if (formatted.length <= DISCORD_MAX) {
-    return { messages: [formatted], attachment: null };
+  // Split into multiple messages
+  const parts = splitMessage(formatted, DISCORD_MAX);
+
+  // If too many parts (>5), send first 2 + attachment
+  if (parts.length > 5) {
+    const preview = parts.slice(0, 2);
+    preview[preview.length - 1] += "\n\n_... full output attached_";
+    return {
+      messages: preview,
+      attachment: {
+        name: `output-${Date.now()}.md`,
+        content: text,  // Original markdown for the file
+      },
+    };
   }
 
-  const preview = formatted.slice(0, PREVIEW_LENGTH) + "\n\n_... full output attached_";
-  return {
-    messages: [preview],
-    attachment: {
-      name: `output-${Date.now()}.md`,
-      content: formatted,
-    },
-  };
+  return { messages: parts, attachment: null };
+}
+
+/**
+ * Convert markdown tables to monospace code blocks for Discord.
+ * Discord doesn't render markdown tables at all.
+ */
+function convertTablesForDiscord(text: string): string {
+  return text.replace(
+    /(?:^|\n)((?:\|[^\n]+\|\n)+)/g,
+    (_match, tableBlock: string) => {
+      const rows = tableBlock.trim().split("\n");
+      // Skip separator rows (|---|---|)
+      const dataRows = rows.filter(r => !r.match(/^\|[\s\-:]+\|$/));
+      if (dataRows.length === 0) return _match;
+      return "\n```\n" + dataRows.join("\n") + "\n```\n";
+    }
+  );
+}
+
+/**
+ * Clean up markdown for better Discord rendering.
+ */
+function cleanForDiscord(text: string): string {
+  // Remove horizontal rules (Discord doesn't render them well)
+  text = text.replace(/^---+$/gm, "");
+  // Collapse multiple blank lines
+  text = text.replace(/\n{3,}/g, "\n\n");
+  return text.trim();
 }
 
 export function splitMessage(text: string, maxLen: number): string[] {
@@ -50,13 +84,21 @@ export function splitMessage(text: string, maxLen: number): string[] {
     let splitAt = maxLen;
     const chunk = remaining.slice(0, maxLen);
 
-    const lastNewline = chunk.lastIndexOf("\n");
-    if (lastNewline > maxLen * 0.5) {
-      splitAt = lastNewline + 1;
+    // Try to split at a paragraph break first
+    const lastDoubleNewline = chunk.lastIndexOf("\n\n");
+    if (lastDoubleNewline > maxLen * 0.3) {
+      splitAt = lastDoubleNewline + 1;
+    } else {
+      // Fall back to single newline
+      const lastNewline = chunk.lastIndexOf("\n");
+      if (lastNewline > maxLen * 0.5) {
+        splitAt = lastNewline + 1;
+      }
     }
 
     let part = remaining.slice(0, splitAt);
 
+    // Handle unclosed code blocks
     const codeBlocks = part.match(/```/g);
     if (codeBlocks && codeBlocks.length % 2 !== 0) {
       part += "\n```";
@@ -65,7 +107,7 @@ export function splitMessage(text: string, maxLen: number): string[] {
       codeLang = langMatch ? langMatch[1] : "";
     }
 
-    parts.push(part);
+    parts.push(part.trim());
     remaining = remaining.slice(splitAt);
 
     if (inCodeBlock) {
@@ -74,7 +116,7 @@ export function splitMessage(text: string, maxLen: number): string[] {
     }
   }
 
-  return parts;
+  return parts.filter(p => p.length > 0);
 }
 
 function formatToolUsage(text: string): string {

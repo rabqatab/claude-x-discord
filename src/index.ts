@@ -5,7 +5,7 @@ async function main() {
   const env = loadEnv();
   const config = loadConfig();
 
-  console.log("claude-x-discord starting...");
+  console.log(`claude-x-discord starting... [${config.machine_name}]`);
 
   const manager = new SessionManager(config, env);
 

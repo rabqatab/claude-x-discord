@@ -34,6 +34,9 @@ export class DiscordGateway extends EventEmitter {
     });
 
     this.client.on(Events.InteractionCreate, (interaction: Interaction) => {
+      if (interaction.isAutocomplete()) {
+        this.emit("autocomplete", interaction);
+      }
       if (interaction.isCommand()) {
         this.emit("command", interaction);
       }

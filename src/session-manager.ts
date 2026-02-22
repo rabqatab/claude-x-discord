@@ -1,4 +1,4 @@
-import { type Message, type ButtonInteraction, type ChatInputCommandInteraction, type ThreadChannel, AttachmentBuilder } from "discord.js";
+import { type Message, type ButtonInteraction, type ChatInputCommandInteraction, type AutocompleteInteraction, type ThreadChannel, AttachmentBuilder } from "discord.js";
 import { DiscordGateway } from "./discord/client.js";
 import { ForumManager } from "./discord/forum.js";
 import { parseButtonAction, sendApprovalRequest } from "./discord/buttons.js";
@@ -9,6 +9,8 @@ import { MemoryDB } from "./db/memory.js";
 import { formatForDiscord } from "./formatter/index.js";
 import { type Config, type Env } from "./config/schema.js";
 import { createCommandRegistry, type CommandRegistry } from "./commands/index.js";
+import { shouldAutoLearn, extractFacets, runAggregation } from "./memory/evolution.js";
+import { getSystemPromptContext } from "./memory/persona.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -21,13 +23,14 @@ export class SessionManager {
   private memory: MemoryDB;
   private commands!: CommandRegistry;
   private pendingApprovals = new Map<string, string>();
+  private debateContext = new Map<string, string>();
 
   constructor(
     private config: Config,
     private env: Env
   ) {
     const dataDir = resolve(
-      process.env.CLAUDE_X_DISCORD_HOME || `${process.env.HOME}/.claude-x-discord`,
+      process.env.CLAUDE_X_DISCORD_HOME || process.cwd(),
       "data"
     );
     mkdirSync(dataDir, { recursive: true });
@@ -55,6 +58,12 @@ export class SessionManager {
       console.log("Discord connected");
       await this.forum.init().catch(console.error);
 
+      // Set presence to show machine name
+      this.gateway.client.user?.setPresence({
+        activities: [{ name: `[${this.config.machine_name}]`, type: 4 }],
+        status: "online",
+      });
+
       const clientId = this.gateway.client.user?.id;
       if (clientId) {
         await this.commands.deployToGuild(
@@ -71,14 +80,23 @@ export class SessionManager {
     this.gateway.on("command", (interaction: ChatInputCommandInteraction) =>
       this.handleCommand(interaction)
     );
+    this.gateway.on("autocomplete", (interaction: AutocompleteInteraction) =>
+      this.handleAutocomplete(interaction)
+    );
 
     await this.gateway.start();
   }
 
   private async handleMessage(msg: Message): Promise<void> {
     const topicId = msg.channelId;
+    console.log(`[msg] channelId=${topicId} content="${msg.content.slice(0, 80)}"`);
+
     const project = this.sessions.getProjectByTopicId(topicId);
-    if (!project) return;
+    if (!project) {
+      console.log(`[msg] no project found for topicId=${topicId}`);
+      return;
+    }
+    console.log(`[msg] project=${project.project_name} path=${project.project_path}`);
 
     this.memory.addConversation({
       topicId,
@@ -86,9 +104,37 @@ export class SessionManager {
       content: msg.content,
     });
 
-    const proc = this.pool.spawn(topicId, {
-      cwd: project.project_path,
-      sessionId: project.session_id ?? undefined,
+    // Inject debate context if available
+    let prompt = msg.content;
+    const debateCtx = this.debateContext.get(topicId);
+    if (debateCtx) {
+      prompt = `[Previous debate results for context]\n${debateCtx}\n\n[User's follow-up question]\n${msg.content}`;
+      this.debateContext.delete(topicId);
+      console.log(`[msg] injected debate context (${debateCtx.length} chars)`);
+    }
+
+    // Inject long-term memory (persona context)
+    const personaContext = getSystemPromptContext();
+    if (personaContext) {
+      prompt = `[Long-term memory]\n${personaContext}\n\n${prompt}`;
+      console.log(`[msg] injected persona context (${personaContext.length} chars)`);
+    }
+
+    let proc;
+    try {
+      proc = this.pool.run(topicId, prompt, {
+        cwd: project.project_path,
+        sessionId: project.session_id ?? undefined,
+      });
+      console.log(`[claude] running pid=${proc.pid} sessionId=${proc.sessionId}`);
+    } catch (err) {
+      console.error(`[claude] run failed:`, err);
+      await (msg.channel as ThreadChannel).send("Failed to start Claude process.").catch(() => {});
+      return;
+    }
+
+    proc.on("error", (err: string) => {
+      console.error(`[claude] stderr: ${err}`);
     });
 
     if (proc.pid) {
@@ -105,7 +151,13 @@ export class SessionManager {
     };
 
     const onData = async (chunk: StreamChunk) => {
-      streamState.buffer += chunk.text + "\n";
+      console.log(`[stream] chunk: "${chunk.text.slice(0, 100)}" complete=${chunk.isComplete} approval=${chunk.isApproval}`);
+      if (chunk.isComplete && chunk.text) {
+        // Result message — replace buffer with authoritative final text
+        streamState.buffer = chunk.text;
+      } else {
+        streamState.buffer += chunk.text;
+      }
       const now = Date.now();
       if (now - streamState.lastEdit < this.config.claude.streaming_debounce) return;
       streamState.lastEdit = now;
@@ -138,22 +190,36 @@ export class SessionManager {
       this.sessions.updateSession(topicId, sessionId, proc.pid ?? 0);
     };
 
-    const onExit = async () => {
+    const onExit = async (code: number | null) => {
+      console.log(`[claude] exited code=${code} buffer=${streamState.buffer.length} chars`);
       proc.removeListener("data", onData);
       proc.removeListener("approval", onApproval);
       proc.removeListener("session", onSession);
       if (streamState.buffer) {
         const formatted = formatForDiscord(streamState.buffer);
         try {
+          // Send the first part: edit existing streaming message or send new
+          let startIdx = 0;
+          if (formatted.messages.length > 0) {
+            if (streamState.messageId) {
+              const existing = await channel.messages.fetch(streamState.messageId);
+              await existing.edit(formatted.messages[0]);
+            } else {
+              await channel.send(formatted.messages[0]);
+            }
+            startIdx = 1;
+          }
+          // Send additional parts as new messages
+          for (let i = startIdx; i < formatted.messages.length; i++) {
+            await channel.send(formatted.messages[i]);
+          }
+          // Send attachment if present
           if (formatted.attachment) {
             const attachment = new AttachmentBuilder(
               Buffer.from(formatted.attachment.content),
               { name: formatted.attachment.name }
             );
-            await channel.send({ content: formatted.messages[0], files: [attachment] });
-          } else if (streamState.messageId) {
-            const existing = await channel.messages.fetch(streamState.messageId);
-            await existing.edit(formatted.messages[0]);
+            await channel.send({ files: [attachment] });
           }
         } catch { /* channel may be gone */ }
         this.memory.addConversation({
@@ -161,6 +227,14 @@ export class SessionManager {
           role: "assistant",
           content: streamState.buffer,
         });
+
+        // Auto-learn: 2-stage facet extraction + aggregation
+        const convCount = this.memory.getConversationCount(topicId);
+        if (shouldAutoLearn(convCount, this.config.memory.facet_interval)) {
+          this.runAutoLearn(topicId, project).catch((err) =>
+            console.error(`[auto-learn] error:`, err)
+          );
+        }
       }
       this.sessions.setStatus(topicId, "idle");
     };
@@ -169,8 +243,6 @@ export class SessionManager {
     proc.on("approval", onApproval);
     proc.on("session", onSession);
     proc.once("exit", onExit);
-
-    proc.send(msg.content);
   }
 
   private async handleButton(interaction: ButtonInteraction): Promise<void> {
@@ -207,6 +279,7 @@ export class SessionManager {
         pool: this.pool,
         forum: this.forum,
         config: this.config,
+        debateContext: this.debateContext,
       });
     } catch (err) {
       console.error(`Command error [${interaction.commandName}]:`, err);
@@ -215,6 +288,81 @@ export class SessionManager {
         await interaction.followUp({ content, ephemeral: true }).catch(() => {});
       } else {
         await interaction.reply({ content, ephemeral: true }).catch(() => {});
+      }
+    }
+  }
+
+  private async handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    const command = this.commands.get(interaction.commandName);
+    if (!command?.autocomplete) return;
+    try {
+      await command.autocomplete(interaction, {
+        sessions: this.sessions,
+        memory: this.memory,
+        pool: this.pool,
+        forum: this.forum,
+        config: this.config,
+        debateContext: this.debateContext,
+      });
+    } catch (err) {
+      console.error(`Autocomplete error [${interaction.commandName}]:`, err);
+    }
+  }
+
+  private async runAutoLearn(
+    topicId: string,
+    project: { project_name: string; project_path: string }
+  ): Promise<void> {
+    const timeoutMs = this.config.memory.analysis_timeout * 1000;
+
+    // Stage 1: Extract facets
+    const facet = await extractFacets(
+      topicId,
+      project.project_name,
+      project.project_path,
+      this.memory,
+      timeoutMs
+    );
+
+    if (!facet) return;
+
+    // Stage 2: Run aggregation if enough facets accumulated
+    const aggregation = await runAggregation(
+      this.memory,
+      this.config.memory.aggregation_threshold,
+      timeoutMs
+    );
+
+    if (!aggregation) return;
+
+    // Send Discord notification with workflow suggestions
+    const notifications: string[] = [];
+    if (aggregation.recurring_friction.length > 0) {
+      notifications.push(
+        `**Recurring friction:**\n${aggregation.recurring_friction.map((f) => `- ${f}`).join("\n")}`
+      );
+    }
+    if (aggregation.workflow_suggestions.length > 0) {
+      notifications.push(
+        `**Workflow suggestions:**\n${aggregation.workflow_suggestions.map((s) => `- ${s}`).join("\n")}`
+      );
+    }
+    if (aggregation.claude_md_recommendations.length > 0) {
+      notifications.push(
+        `**CLAUDE.md recommendations:**\n${aggregation.claude_md_recommendations.map((r) => `- ${r}`).join("\n")}`
+      );
+    }
+
+    if (notifications.length > 0) {
+      try {
+        const channel = this.gateway.client.channels.cache.get(topicId);
+        if (channel && "send" in channel) {
+          await (channel as ThreadChannel).send(
+            `\u{1f9e0} **Auto-learning aggregation complete**\n\n${notifications.join("\n\n")}`
+          );
+        }
+      } catch (err) {
+        console.error(`[auto-learn] failed to send Discord notification:`, err);
       }
     }
   }

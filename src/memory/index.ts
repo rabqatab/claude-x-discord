@@ -1,8 +1,12 @@
 export {
   shouldAutoLearn,
-  extractLessons,
-  buildPatternAnalysisPrompt,
-  buildSessionLearnPrompt,
+  extractFacets,
+  runAggregation,
+  parseAnalysisJson,
+  buildFacetExtractionPrompt,
+  buildAggregationPrompt,
+  type Facet,
+  type Aggregation,
 } from "./evolution.js";
 export {
   getUser,

@@ -5,7 +5,7 @@ import { config as loadDotenv } from "dotenv";
 import { configSchema, envSchema, type Config, type Env } from "./schema.js";
 
 const CONFIG_DIR = resolve(
-  process.env.CLAUDE_X_DISCORD_HOME || `${process.env.HOME}/.claude-x-discord`
+  process.env.CLAUDE_X_DISCORD_HOME || process.cwd()
 );
 
 export function loadEnv(): Env {

@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+Bridge script: spawns an AI CLI and streams output to stdout.
+Node.js cannot pipe certain CLI tools' stdout directly, but Python can.
+
+Supports: claude, gemini, codex
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import signal
+import threading
+
+
+def log(msg):
+    sys.stderr.write(f"[bridge] {msg}\n")
+    sys.stderr.flush()
+
+
+def build_command(cli, prompt, cwd, bin_path=None, session=None):
+    """Build the CLI command based on the AI tool."""
+    if cli == "claude":
+        exe = bin_path or os.environ.get("CLAUDE_BIN", "claude")
+        cmd = [exe, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+        if session:
+            cmd.extend(["--resume", session])
+        return cmd
+
+    elif cli == "gemini":
+        exe = bin_path or os.environ.get("GEMINI_BIN", "gemini")
+        cmd = [exe, "-p", prompt, "--output-format", "json", "--yolo"]
+        return cmd
+
+    elif cli == "codex":
+        exe = bin_path or os.environ.get("CODEX_BIN", "codex")
+        model = os.environ.get("CODEX_MODEL", "gpt-5.3-codex")
+        cmd = [exe, "exec", "--json", "--model", model, "--cd", cwd, "--full-auto", "--skip-git-repo-check", prompt]
+        return cmd
+
+    else:
+        raise ValueError(f"Unknown CLI: {cli}")
+
+
+def build_env(cli):
+    """Build environment, removing vars that cause nested session errors."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+    if cli == "claude":
+        env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+    return env
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cli", required=True, choices=["claude", "gemini", "codex"])
+    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--cwd", required=True)
+    parser.add_argument("--session", default=None)
+    parser.add_argument("--bin", default=None, help="Path to CLI binary")
+    args = parser.parse_args()
+
+    # Change THIS process's cwd to the project directory BEFORE spawning
+    # This ensures CLI tools that check parent cwd get the right directory
+    os.chdir(args.cwd)
+    log(f"chdir to {os.getcwd()}")
+
+    cmd = build_command(args.cli, args.prompt, args.cwd, args.bin, args.session)
+    env = build_env(args.cli)
+
+    log(f"cli={args.cli} cwd={args.cwd}")
+    log(f"cmd: {cmd[:5]}...")
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=args.cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+
+    log(f"spawned pid={proc.pid}")
+
+    def handle_signal(sig, frame):
+        proc.terminate()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    # Read stderr in a thread
+    def read_stderr():
+        try:
+            for line in proc.stderr:
+                log(f"stderr: {line.decode().strip()[:200]}")
+        except:
+            pass
+
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stderr_thread.start()
+
+    # Stream stdout line by line
+    try:
+        for line in proc.stdout:
+            os.write(1, line)
+    except (BrokenPipeError, OSError):
+        pass
+
+    proc.wait()
+    sys.exit(proc.returncode or 0)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { assembleContext } from "../../src/debate/context.js";
+import { assembleApiContext } from "../../src/debate/context.js";
 
-describe("assembleContext", () => {
+describe("assembleApiContext", () => {
   it("combines facts and summary into context document", () => {
-    const result = assembleContext({
-      projectFacts: { tree: "src/\n  index.ts", dependencies: '{ "discord.js": "^14" }', readme: "# My Project" },
+    const result = assembleApiContext({
+      projectFacts: { tree: "src/\n  index.ts", dependencies: '{ "discord.js": "^14" }', readme: "# My Project", sourceFiles: "" },
       claudeSummary: "This is a Discord bot",
       question: "Redis vs SQLite?",
     });

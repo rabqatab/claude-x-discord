@@ -1,0 +1,29 @@
+machine_name: "my-machine"
+
+discord:
+  guild_id: "YOUR_DISCORD_SERVER_ID"
+  forum_channel_id: "YOUR_FORUM_CHANNEL_ID"
+  allowed_user_ids:
+    - "YOUR_DISCORD_USER_ID"
+
+claude:
+  idle_timeout: 1800
+  max_processes: 7
+  streaming_debounce: 1000
+
+models:
+  claude: "claude-opus-4-6"
+  gemini: "gemini-3.1-pro"
+  codex: "gpt-5.3-codex"
+
+debate:
+  timeout: 300
+  gemini_enabled: true
+  codex_enabled: true
+
+memory:
+  auto_learn_interval: 10
+  confidence_decay: 0.95
+  facet_interval: 10
+  aggregation_threshold: 5
+  analysis_timeout: 120
