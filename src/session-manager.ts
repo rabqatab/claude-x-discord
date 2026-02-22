@@ -143,6 +143,7 @@ export class SessionManager {
 
     if (proc.pid) {
       this.sessions.updateSession(topicId, proc.sessionId ?? "", proc.pid);
+      this.sessions.setStatus(topicId, "running");
     }
 
     const channel = msg.channel as ThreadChannel;

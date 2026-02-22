@@ -87,7 +87,7 @@ def main():
         cwd=args.cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE,
         env=env,
     )
 
@@ -97,6 +97,23 @@ def main():
         proc.terminate()
         sys.exit(0)
     signal.signal(signal.SIGTERM, handle_signal)
+
+    # Relay stdin from parent (Node.js) to child CLI (for approve/deny)
+    def relay_stdin():
+        try:
+            for line in sys.stdin.buffer:
+                if proc.stdin and not proc.stdin.closed:
+                    proc.stdin.write(line)
+                    proc.stdin.flush()
+                    log(f"stdin relay: {line.decode().strip()[:50]}")
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.close()
+
+    stdin_thread = threading.Thread(target=relay_stdin, daemon=True)
+    stdin_thread.start()
 
     # Read stderr in a thread
     def read_stderr():

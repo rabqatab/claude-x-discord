@@ -99,12 +99,12 @@ export function splitMessage(text: string, maxLen: number): string[] {
     let part = remaining.slice(0, splitAt);
 
     // Handle unclosed code blocks
-    const codeBlocks = part.match(/```/g);
-    if (codeBlocks && codeBlocks.length % 2 !== 0) {
+    const fences = [...part.matchAll(/```(\w*)/g)];
+    if (fences.length % 2 !== 0) {
+      // Odd number of fences = unclosed block. Last fence is the opening one.
       part += "\n```";
       inCodeBlock = true;
-      const langMatch = part.match(/```(\w+)/);
-      codeLang = langMatch ? langMatch[1] : "";
+      codeLang = fences[fences.length - 1][1] || "";
     }
 
     parts.push(part.trim());

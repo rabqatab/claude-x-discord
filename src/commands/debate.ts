@@ -47,6 +47,7 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: CommandCon
       .map(r => `=== ${r.ai} ===\n${r.error ? `Error: ${r.error}` : r.response}`)
       .join("\n\n");
     ctx.debateContext.set(topicId, `Question: ${question}\n\n${debateSummary}`);
+    setTimeout(() => { ctx.debateContext.delete(topicId); }, 10 * 60 * 1000);
 
     // First message: the question as header
     const header = `**Debate:** ${question}`;

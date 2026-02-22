@@ -22,6 +22,10 @@ export class ClaudePool {
     this.sessionIds.set(topicId, sessionId);
   }
 
+  clearSessionId(topicId: string): void {
+    this.sessionIds.delete(topicId);
+  }
+
   /** Run a prompt for a given topic. Creates a new ClaudeProcess per message. */
   run(topicId: string, prompt: string, options: ClaudeProcessOptions): ClaudeProcess {
     // Kill existing process if still running
@@ -50,7 +54,11 @@ export class ClaudePool {
     this.resetIdleTimer(topicId);
 
     proc.on("exit", () => {
-      this.clearIdleTimer(topicId);
+      // Only clear timer if this process is still the active one for this topic.
+      // Prevents stale exit handler from clearing a newer process's timer.
+      if (this.processes.get(topicId) === proc) {
+        this.clearIdleTimer(topicId);
+      }
     });
 
     return proc;

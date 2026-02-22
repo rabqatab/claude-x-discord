@@ -15,6 +15,7 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: CommandCon
   }
 
   ctx.pool.kill(topicId);
+  ctx.pool.clearSessionId(topicId);
   ctx.sessions.updateSession(topicId, "", 0);
   ctx.sessions.setStatus(topicId, "idle");
 
