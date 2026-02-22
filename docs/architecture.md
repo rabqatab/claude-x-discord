@@ -36,6 +36,9 @@ claude-x-discord/
 │   ├── formatter/
 │   │   └── index.ts             ← 하이브리드 포매터 (2000자 분할 + 파일 첨부)
 │   │
+│   ├── utils/
+│   │   └── logger.ts            ← 태그 로거 + 파일 로깅 (console.log 인터셉트)
+│   │
 │   ├── commands/
 │   │   ├── registry.ts          ← CommandRegistry (등록/배포) + Command/CommandContext 인터페이스
 │   │   ├── custom-loader.ts     ← ~/.claude-x-discord/commands/ 로더
@@ -74,8 +77,10 @@ claude-x-discord/
 │   ├── memory/evolution.test.ts
 │   └── integration/smoke.test.ts
 │
+├── .nvmrc                       ← Node 22 지정 (nvm use 자동 선택)
 ├── config.yaml                  ← 동작 설정 (machine_name 포함)
 ├── .env                         ← 시크릿/환경변수
+├── logs/                        ← 일별 자동 로테이션 로그 ({machine_name}-{날짜}.log)
 └── data/
     ├── memory.db                ← SQLite + FTS5
     └── sessions.db              ← 세션/프로젝트 매핑

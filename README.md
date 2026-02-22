@@ -33,6 +33,7 @@ Optional (for `/debate`):
 ```bash
 git clone https://github.com/your-username/claude-x-discord.git
 cd claude-x-discord
+nvm use            # .nvmrc → Node 22 자동 선택
 pnpm install
 pnpm build
 ```
@@ -80,16 +81,24 @@ discord:
 ### Run
 
 ```bash
+nvm use            # Node 22 필수 (.nvmrc)
 pnpm start
 ```
 
+시작 시 Node 버전이 22 미만이면 에러 메시지와 함께 종료됩니다.
+로그는 `logs/{machine_name}-{YYYY-MM-DD}.log`에 자동 기록됩니다.
+
 ### Daemonize (pm2)
+
+pm2는 NVM을 자동 로드하지 않으므로, Node 22 바이너리의 전체 경로를 사용합니다:
 
 ```bash
 npm install -g pm2
-pm2 start dist/index.js --name claude-x-discord
+pm2 start dist/index.js --name claude-x-discord --interpreter $(which node)
 pm2 save && pm2 startup
 ```
+
+> `which node`가 v22를 가리키는지 반드시 확인하세요 (`node -v`).
 
 ## Usage
 
@@ -158,6 +167,7 @@ src/
 ├── discord/         # Gateway, forum manager, button handlers
 ├── formatter/       # Discord message formatting + chunking
 ├── memory/          # Auto-learning pipeline + persona files
+├── utils/           # Tagged logger with file logging
 └── session-manager.ts  # Core orchestrator
 ```
 

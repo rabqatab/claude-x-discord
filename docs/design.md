@@ -101,7 +101,9 @@ Node.js                 Python Bridge              Claude CLI
   │                         │                          │
   ├─ spawn python3 ────────►│                          │
   │   claude-bridge.py      ├─ subprocess.Popen() ────►│
-  │                         │   (stdin=DEVNULL)        │
+  │                         │   (stdin=PIPE)           │
+  │                         │                          │
+  │──── "y\n" (approve) ──►│──── stdin relay ─────────►│  ← approve/deny
   │                         │                          │
   │                         │◄──── stdout (JSON) ──────┤
   │◄──── stdout relay ──────┤                          │
@@ -242,7 +244,7 @@ Discord Server
         └── 8파트 초과 → 처음 3개 + .md 파일 첨부
         │
         ▼
-  debateContext Map에 결과 저장 → 다음 사용자 메시지에 자동 주입
+  debateContext Map에 결과 저장 (TTL: 10분) → 다음 사용자 메시지에 자동 주입
 ```
 
 ### 6.2 Design Choices
@@ -371,8 +373,10 @@ Discord Server
 
 ```
 claude-x-discord/              (또는 $CLAUDE_X_DISCORD_HOME)
+├── .nvmrc                     ← Node 22 지정
 ├── .env                       ← 시크릿/환경변수
 ├── config.yaml                ← 동작 설정
+├── logs/                      ← 일별 로그 ({machine_name}-{날짜}.log)
 ├── data/
 │   ├── memory.db              ← SQLite + FTS5
 │   └── sessions.db            ← 세션/프로젝트 매핑
@@ -394,8 +398,12 @@ CODEX_API_KEY=your_codex_api_key
 
 # Optional
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-CLAUDE_BIN=/custom/path/to/claude
-CODEX_MODEL=gpt-5.3-codex
+
+# CLI binary paths (NVM 환경에서는 전체 경로 권장)
+# Bridge가 CLI 바이너리 디렉토리를 PATH에 추가하여 올바른 Node.js 사용
+CLAUDE_BIN=/home/user/.nvm/versions/node/v22.22.0/bin/claude
+GEMINI_BIN=/home/user/.nvm/versions/node/v22.22.0/bin/gemini
+CODEX_BIN=/home/user/.nvm/versions/node/v22.22.0/bin/codex
 ```
 
 ### 11.3 config.yaml
@@ -431,12 +439,16 @@ memory:
 ### 11.4 Execution
 
 ```bash
-pnpm start    # .env 자동 로드 + config.yaml 로드 + 서버 구동
+nvm use        # .nvmrc → Node 22
+pnpm start     # .env 자동 로드 + config.yaml 로드 + 서버 구동
 ```
+
+시작 시 Node 22 미만이면 에러와 함께 종료. 모든 로그는 `logs/` 디렉토리에 자동 기록.
 
 데몬화:
 ```bash
-pm2 start dist/index.js --name claude-x-discord
+nvm use 22
+pm2 start dist/index.js --name claude-x-discord --interpreter $(which node)
 ```
 
 ### 11.5 Error Handling

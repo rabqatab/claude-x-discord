@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js >= 22
+- **Node.js >= 22** (NVM 권장)
 - pnpm
 - Python 3 (claude-bridge.py 실행용)
 - Claude Code CLI (`claude`) installed and authenticated
@@ -16,19 +16,61 @@
 
 ---
 
-## 1. Build
+## 1. Node.js 환경 설정
+
+프로젝트는 Node.js 22+ 필수. 시작 시 버전을 체크하며, 22 미만이면 에러와 함께 종료된다.
+
+### NVM 설치 (미설치 시)
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+source ~/.bashrc
+```
+
+### Node 22 설치 및 설정
+
+```bash
+nvm install 22
+nvm alias default 22    # 새 터미널에서 기본 Node 22 사용
+```
+
+### Gemini/Codex CLI 설치 (Node 22 환경에서)
+
+```bash
+nvm use 22
+npm install -g @anthropic-ai/claude-code    # 이미 설치되어 있을 수 있음
+npm install -g @anthropic-ai/gemini-cli      # /debate용 (선택)
+npm install -g codex                         # /debate용 (선택)
+```
+
+> **중요**: Gemini CLI는 Node 22+의 Unicode Sets regex (`/v` flag)를 사용한다. Node 18에서 실행하면 크래시.
+
+### CLI 바이너리 경로 확인
+
+NVM 환경에서 CLI가 어디에 설치되었는지 확인:
+
+```bash
+which claude    # e.g. /home/user/.nvm/versions/node/v22.22.0/bin/claude
+which gemini    # e.g. /home/user/.nvm/versions/node/v22.22.0/bin/gemini
+which codex     # e.g. /home/user/.nvm/versions/node/v22.22.0/bin/codex
+```
+
+이 경로들을 `.env`의 `CLAUDE_BIN`, `GEMINI_BIN`, `CODEX_BIN`에 설정하면, 비인터랙티브 셸(systemd, pm2 등)에서도 올바른 Node 버전으로 CLI를 실행한다.
+
+## 2. Build
 
 ```bash
 cd claude-x-discord
+nvm use                 # .nvmrc → Node 22 자동 선택
 pnpm install
 pnpm build
 ```
 
-## 2. Configure
+## 3. Configure
 
 설정 파일은 프로젝트 디렉토리에 위치한다. `CLAUDE_X_DISCORD_HOME` 환경변수로 변경 가능.
 
-### 2.1 `.env` (시크릿)
+### 3.1 `.env` (시크릿)
 
 ```bash
 # claude-x-discord/.env
@@ -43,14 +85,15 @@ CODEX_API_KEY=your_codex_api_key
 # Optional - Agent Teams
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
-# Optional - Custom binary paths
-# CLAUDE_BIN=/custom/path/to/claude
-# CODEX_BIN=/custom/path/to/codex
-# GEMINI_BIN=/custom/path/to/gemini
-# CODEX_MODEL=gpt-5.3-codex
+# CLI binary paths (NVM 환경에서는 전체 경로 권장)
+# 비인터랙티브 셸(systemd, pm2)에서 올바른 Node.js 버전을 사용하기 위함.
+# Bridge가 CLI 바이너리 경로에서 Node.js 위치를 추론하여 PATH에 추가한다.
+CLAUDE_BIN=/home/user/.nvm/versions/node/v22.22.0/bin/claude
+GEMINI_BIN=/home/user/.nvm/versions/node/v22.22.0/bin/gemini
+CODEX_BIN=/home/user/.nvm/versions/node/v22.22.0/bin/codex
 ```
 
-### 2.2 `config.yaml` (설정)
+### 3.2 `config.yaml` (설정)
 
 ```yaml
 # claude-x-discord/config.yaml
@@ -83,7 +126,7 @@ memory:
   confidence_decay: 0.95          # 기억 confidence 감쇠율
 ```
 
-## 3. Discord Bot Setup
+## 4. Discord Bot Setup
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) 에서 Application 생성
 2. Bot 탭에서 Token 복사 → `.env`의 `DISCORD_TOKEN`에 입력
@@ -107,29 +150,62 @@ memory:
 4. 각 기기 `.env`에 다른 `DISCORD_TOKEN` 설정
 5. Claude Code CLI 로그인은 각 기기에서 수동으로 수행
 
-## 4. Run
+## 5. Run
 
 ```bash
+nvm use            # .nvmrc → Node 22
 pnpm start
 ```
 
 시작 시 출력:
 ```
-claude-x-discord starting... [macmini-nick]
+claude-x-discord starting... [macmini-nick] node=22.22.0
+[logger] file logging → /path/to/logs/macmini-nick-2026-02-22.log
 Discord connected
 Slash commands deployed
 ```
 
-### 데몬화 (pm2)
+Node 22 미만이면 즉시 종료:
+```
+Node.js v18.19.1 detected. Requires >=v22. Run: nvm use 22
+```
+
+### 로그 파일
+
+모든 `console.log`/`error`/`warn` 출력이 `logs/{machine_name}-{YYYY-MM-DD}.log`에 자동 기록된다.
+
+- 일별 자동 로테이션 (날짜 변경 시 새 파일)
+- 로그 포맷: `[tag|instance:project] message`
+- 터미널 출력과 파일 기록 동시 수행
 
 ```bash
+# 실시간 로그 모니터링
+tail -f logs/macmini-nick-2026-02-22.log
+
+# 특정 프로젝트만 필터링
+grep "macmini-nick:myapp" logs/macmini-nick-2026-02-22.log
+
+# 에러만 필터링
+grep "ERROR" logs/macmini-nick-2026-02-22.log
+```
+
+### 데몬화 (pm2)
+
+pm2는 NVM을 자동 로드하지 않으므로, Node 22 바이너리의 전체 경로를 사용:
+
+```bash
+nvm use 22
 npm install -g pm2
-pm2 start dist/index.js --name claude-x-discord
+
+# --interpreter로 현재 Node.js (v22) 경로를 명시
+pm2 start dist/index.js --name claude-x-discord --interpreter $(which node)
 pm2 save
 pm2 startup    # 시스템 부팅 시 자동 시작
 ```
 
-## 5. Usage
+> `which node`가 반드시 v22를 가리키는지 확인. `nvm use 22` 후 실행할 것.
+
+## 6. Usage
 
 봇이 실행되면 Discord에서:
 
@@ -171,7 +247,7 @@ pm2 startup    # 시스템 부팅 시 자동 시작
 → debate 결과가 자동으로 Claude에 주입되어 종합 응답 생성
 ```
 
-## 6. Custom Commands
+## 7. Custom Commands
 
 `~/.claude-x-discord/commands/` 에 `.js` 파일을 추가하면 자동으로 슬래시 커맨드로 등록된다.
 
@@ -192,7 +268,7 @@ export default {
 
 봇 재시작 시 자동 로드.
 
-## 7. Environment Variable Override
+## 8. Environment Variable Override
 
 `CLAUDE_X_DISCORD_HOME` 환경변수로 설정/데이터 디렉토리를 변경할 수 있다:
 
@@ -200,12 +276,16 @@ export default {
 CLAUDE_X_DISCORD_HOME=/custom/path pnpm start
 ```
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | 증상 | 원인 | 해결 |
 |------|------|------|
+| `Requires >=v22` 에러 후 종료 | 시스템 Node가 v18 등 구버전 | `nvm use 22` 후 재실행 |
+| `NODE_MODULE_VERSION` 불일치 | better-sqlite3가 다른 Node 버전으로 빌드됨 | `nvm use 22 && pnpm rebuild better-sqlite3` |
+| Gemini CLI 크래시 (`/v` flag) | Node 18에서 Gemini CLI 실행 | `.env`에 `GEMINI_BIN`을 Node 22 경로로 설정 |
+| pm2에서 Node 18 사용 | pm2가 시스템 Node를 사용 | `--interpreter $(which node)` 옵션 사용 (nvm use 22 후) |
 | Claude "(no response)" | Python3 미설치 또는 PATH에 없음 | `python3 --version` 확인 |
 | Debate에서 Gemini raw JSON | Gemini CLI 출력 형식 변경 | `gemini` CLI 업데이트 |
-| 텍스트 중복 출력 | stream-json 파싱 문제 | 최신 코드로 업데이트 (parser.ts 중복 방지) |
 | `Slash commands deployed` 안 뜸 | Bot에 `applications.commands` scope 없음 | OAuth2 URL 재생성 후 재초대 |
 | 경로 autocomplete 안 됨 | PROJECT_ROOTS에 해당 디렉토리 없음 | register.ts의 PROJECT_ROOTS 수정 |
+| 두 인스턴스 로그 구분 안 됨 | `machine_name`이 동일 | 각 기기 `config.yaml`에 다른 `machine_name` 설정 |
