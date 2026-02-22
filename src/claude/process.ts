@@ -15,6 +15,8 @@ export interface ClaudeProcessOptions {
   sessionId?: string;
   verbose?: boolean;
   env?: Record<string, string>;
+  /** Log prefix for identifying instance + project, e.g. "spark:my-app" */
+  label?: string;
 }
 
 export class ClaudeProcess extends EventEmitter {
@@ -36,6 +38,7 @@ export class ClaudeProcess extends EventEmitter {
    */
   run(prompt: string): void {
     const claudeBin = process.env.CLAUDE_BIN || "claude";
+    const tag = this.options.label ? `claude|${this.options.label}` : "claude";
 
     const args = [
       BRIDGE_SCRIPT,
@@ -50,7 +53,7 @@ export class ClaudeProcess extends EventEmitter {
       args.push("--session", this.sessionId);
     }
 
-    console.log(`[claude] spawn bridge: prompt="${prompt.slice(0, 80)}..." cwd=${this.options.cwd}`);
+    console.log(`[${tag}] spawn bridge: prompt="${prompt.slice(0, 80)}..." cwd=${this.options.cwd}`);
 
     const env = { ...process.env, ...this.options.env };
     // Clean env vars that cause nested session errors
@@ -79,12 +82,12 @@ export class ClaudeProcess extends EventEmitter {
     this.proc.stderr!.on("data", (data: Buffer) => {
       const text = data.toString().trim();
       if (text) {
-        console.log(`[claude-stderr] ${text.slice(0, 300)}`);
+        console.log(`[${tag}:stderr] ${text.slice(0, 300)}`);
       }
     });
 
     this.proc.on("exit", (code) => {
-      console.log(`[claude] process exited code=${code}`);
+      console.log(`[${tag}] process exited code=${code}`);
       this.pid = null;
       // Process remaining buffer
       if (this.buffer.trim()) {
@@ -95,7 +98,7 @@ export class ClaudeProcess extends EventEmitter {
     });
 
     this.proc.on("error", (err: Error) => {
-      console.error(`[claude] process error:`, err.message);
+      console.error(`[${tag}] process error: ${err.message}`);
       this.emit("error", err.message);
     });
   }
@@ -126,7 +129,8 @@ export class ClaudeProcess extends EventEmitter {
   approve(): void {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.write("y\n");
-      console.log("[claude] sent approval: y");
+      const tag = this.options.label ? `claude|${this.options.label}` : "claude";
+      console.log(`[${tag}] sent approval: y`);
     }
   }
 
@@ -134,7 +138,8 @@ export class ClaudeProcess extends EventEmitter {
   deny(): void {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.write("n\n");
-      console.log("[claude] sent denial: n");
+      const tag = this.options.label ? `claude|${this.options.label}` : "claude";
+      console.log(`[${tag}] sent denial: n`);
     }
   }
 

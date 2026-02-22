@@ -16,10 +16,13 @@ export interface DebateResponse {
 export interface DebateOptions {
   question: string;
   projectPath: string;
+  /** Label for log lines, e.g. "spark:my-app" */
+  label?: string;
 }
 
 export async function runDebate(options: DebateOptions, config: Config, env: Env): Promise<DebateResponse[]> {
   const timeoutMs = (config.debate.timeout || 300) * 1000;
+  const logLabel = options.label || "";
   const promises: Promise<DebateResponse>[] = [];
 
   // Claude CLI — tell it to explore the project
@@ -28,6 +31,7 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
     runBridge("claude", claudePrompt, options.projectPath, {
       bin: process.env.CLAUDE_BIN,
       timeoutMs,
+      label: logLabel,
     })
   );
 
@@ -38,6 +42,7 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
         bin: process.env.GEMINI_BIN,
         extraEnv: { GEMINI_API_KEY: env.GEMINI_API_KEY },
         timeoutMs,
+        label: logLabel,
       })
     );
   }
@@ -49,6 +54,7 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
         bin: process.env.CODEX_BIN,
         extraEnv: { CODEX_API_KEY: env.CODEX_API_KEY, OPENAI_API_KEY: env.CODEX_API_KEY },
         timeoutMs,
+        label: logLabel,
       })
     );
   }
@@ -66,6 +72,7 @@ interface BridgeOptions {
   bin?: string;
   extraEnv?: Record<string, string>;
   timeoutMs?: number;
+  label?: string;
 }
 
 function runBridge(
@@ -75,6 +82,7 @@ function runBridge(
   opts: BridgeOptions = {}
 ): Promise<DebateResponse> {
   const displayName = cli.charAt(0).toUpperCase() + cli.slice(1);
+  const tag = opts.label ? `debate:${cli}|${opts.label}` : `debate:${cli}`;
 
   return new Promise((resolvePromise) => {
     const args = ["-u", BRIDGE_SCRIPT, "--cli", cli, "--prompt", prompt, "--cwd", projectPath];
@@ -102,9 +110,9 @@ function runBridge(
     });
 
     proc.on("close", (code) => {
-      console.log(`[debate:${cli}] exited code=${code} stdout=${output.length}chars stderr=${stderr.length}chars`);
-      console.log(`[debate:${cli}] raw output (first 800): ${output.slice(0, 800)}`);
-      if (stderr) console.log(`[debate:${cli}] stderr: ${stderr.slice(0, 500)}`);
+      console.log(`[${tag}] exited code=${code} stdout=${output.length}chars stderr=${stderr.length}chars`);
+      console.log(`[${tag}] raw output (first 800): ${output.slice(0, 800)}`);
+      if (stderr) console.log(`[${tag}] stderr: ${stderr.slice(0, 500)}`);
 
       let text: string;
       if (cli === "claude") {
@@ -115,7 +123,7 @@ function runBridge(
         text = extractGeminiResult(output);
       }
 
-      console.log(`[debate:${cli}] extracted text length: ${text.length}`);
+      console.log(`[${tag}] extracted text length: ${text.length}`);
       const error = code !== 0 ? `exit code ${code}: ${stderr.slice(0, 300)}` : null;
       resolvePromise({ ai: displayName, response: text || "(no response)", error });
     });

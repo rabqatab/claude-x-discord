@@ -190,9 +190,11 @@ export async function extractFacets(
   projectName: string,
   projectPath: string,
   memory: MemoryDB,
-  timeoutMs: number = 120_000
+  timeoutMs: number = 120_000,
+  label?: string
 ): Promise<Facet | null> {
-  console.log(`[facet] extracting for topic=${topicId} project=${projectName}`);
+  const tag = label ? `facet|${label}` : "facet";
+  console.log(`[${tag}] extracting for topic=${topicId} project=${projectName}`);
 
   // Get conversations since last facet extraction for this topic
   const lastExtractedTs = memory.getAnalysisState(`facet_last_${topicId}`);
@@ -200,7 +202,7 @@ export async function extractFacets(
   const conversations = memory.getConversationsSince(topicId, since);
 
   if (conversations.length === 0) {
-    console.log(`[facet] no new conversations for topic=${topicId}`);
+    console.log(`[${tag}] no new conversations for topic=${topicId}`);
     return null;
   }
 
@@ -211,7 +213,7 @@ export async function extractFacets(
   const result = await runOneShotClaude(prompt, projectPath, timeoutMs);
 
   if (result.error) {
-    console.error(`[facet] Claude error: ${result.error}`);
+    console.error(`[${tag}] Claude error: ${result.error}`);
     return null;
   }
 
@@ -223,8 +225,8 @@ export async function extractFacets(
   }>(result.text);
 
   if (!parsed) {
-    console.error(`[facet] failed to parse JSON from Claude response`);
-    console.error(`[facet] raw response (first 500): ${result.text.slice(0, 500)}`);
+    console.error(`[${tag}] failed to parse JSON from Claude response`);
+    console.error(`[${tag}] raw response (first 500): ${result.text.slice(0, 500)}`);
     return null;
   }
 
@@ -250,9 +252,9 @@ export async function extractFacets(
     const section = `\n\n## Auto-learned (${timestamp})\n${facet.project_lessons.map((l) => `- ${l}`).join("\n")}\n`;
     try {
       appendFileSync(claudeMdPath, section, "utf-8");
-      console.log(`[facet] appended ${facet.project_lessons.length} lessons to ${claudeMdPath}`);
+      console.log(`[${tag}] appended ${facet.project_lessons.length} lessons to ${claudeMdPath}`);
     } catch (err) {
-      console.warn(`[facet] failed to append to CLAUDE.md: ${err}`);
+      console.warn(`[${tag}] failed to append to CLAUDE.md: ${err}`);
     }
   }
 
@@ -263,13 +265,13 @@ export async function extractFacets(
     const existing = getLessons();
     const section = `\n### ${timestamp} (auto-learned)\n${globalItems.map((l) => `- ${l}`).join("\n")}`;
     setLessons(existing ? `${existing}\n${section}` : section);
-    console.log(`[facet] appended ${globalItems.length} items to LESSONS.md`);
+    console.log(`[${tag}] appended ${globalItems.length} items to LESSONS.md`);
   }
 
   // Update analysis state
   memory.setAnalysisState(`facet_last_${topicId}`, String(now));
 
-  console.log(`[facet] extracted for topic=${topicId}: ${facet.project_lessons.length} project, ${facet.global_lessons.length} global, ${facet.friction.length} friction, ${facet.patterns.length} patterns`);
+  console.log(`[${tag}] extracted for topic=${topicId}: ${facet.project_lessons.length} project, ${facet.global_lessons.length} global, ${facet.friction.length} friction, ${facet.patterns.length} patterns`);
   return facet;
 }
 
@@ -278,19 +280,21 @@ export async function extractFacets(
 export async function runAggregation(
   memory: MemoryDB,
   threshold: number,
-  timeoutMs: number = 120_000
+  timeoutMs: number = 120_000,
+  label?: string
 ): Promise<Aggregation | null> {
+  const tag = label ? `aggregation|${label}` : "aggregation";
   // Get last aggregation timestamp
   const lastAggTs = memory.getAnalysisState("aggregation_last");
   const since = lastAggTs ? parseInt(lastAggTs, 10) : 0;
 
   const facets = loadFacetsSince(since);
   if (facets.length < threshold) {
-    console.log(`[aggregation] only ${facets.length}/${threshold} facets, skipping`);
+    console.log(`[${tag}] only ${facets.length}/${threshold} facets, skipping`);
     return null;
   }
 
-  console.log(`[aggregation] running with ${facets.length} facets`);
+  console.log(`[${tag}] running with ${facets.length} facets`);
 
   // Use first facet's project path as cwd (arbitrary but needed)
   const cwd = facets[0].project_path;
@@ -298,7 +302,7 @@ export async function runAggregation(
   const result = await runOneShotClaude(prompt, cwd, timeoutMs);
 
   if (result.error) {
-    console.error(`[aggregation] Claude error: ${result.error}`);
+    console.error(`[${tag}] Claude error: ${result.error}`);
     return null;
   }
 
@@ -311,8 +315,8 @@ export async function runAggregation(
   }>(result.text);
 
   if (!parsed) {
-    console.error(`[aggregation] failed to parse JSON`);
-    console.error(`[aggregation] raw (first 500): ${result.text.slice(0, 500)}`);
+    console.error(`[${tag}] failed to parse JSON`);
+    console.error(`[${tag}] raw (first 500): ${result.text.slice(0, 500)}`);
     return null;
   }
 
@@ -330,7 +334,7 @@ export async function runAggregation(
   if (aggregation.user_profile.length > 0) {
     const profileContent = aggregation.user_profile.map((l) => `- ${l}`).join("\n");
     setUser(`# User Profile\n\n${profileContent}\n\n_Last updated: ${new Date().toISOString().slice(0, 10)}_\n`);
-    console.log(`[aggregation] updated USER.md with ${aggregation.user_profile.length} items`);
+    console.log(`[${tag}] updated USER.md with ${aggregation.user_profile.length} items`);
   }
 
   // PATTERNS.md — append
@@ -339,12 +343,12 @@ export async function runAggregation(
     const existing = getPatterns();
     const section = `\n### ${timestamp} (aggregated)\n${aggregation.pattern_changes.map((l) => `- ${l}`).join("\n")}`;
     setPatterns(existing ? `${existing}\n${section}` : section);
-    console.log(`[aggregation] appended ${aggregation.pattern_changes.length} patterns to PATTERNS.md`);
+    console.log(`[${tag}] appended ${aggregation.pattern_changes.length} patterns to PATTERNS.md`);
   }
 
   // Update aggregation timestamp
   memory.setAnalysisState("aggregation_last", String(now));
 
-  console.log(`[aggregation] complete: ${aggregation.workflow_suggestions.length} suggestions, ${aggregation.claude_md_recommendations.length} recommendations`);
+  console.log(`[${tag}] complete: ${aggregation.workflow_suggestions.length} suggestions, ${aggregation.claude_md_recommendations.length} recommendations`);
   return aggregation;
 }

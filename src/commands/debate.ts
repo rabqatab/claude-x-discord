@@ -35,8 +35,9 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: CommandCon
 
   try {
     const env = loadEnv();
+    const label = `${ctx.config.machine_name}:${project.project_name}`;
     const responses = await runDebate(
-      { question, projectPath: project.project_path },
+      { question, projectPath: project.project_path, label },
       ctx.config,
       env
     );

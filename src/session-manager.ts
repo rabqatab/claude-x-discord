@@ -11,6 +11,7 @@ import { type Config, type Env } from "./config/schema.js";
 import { createCommandRegistry, type CommandRegistry } from "./commands/index.js";
 import { shouldAutoLearn, extractFacets, runAggregation } from "./memory/evolution.js";
 import { getSystemPromptContext } from "./memory/persona.js";
+import { createLogger, type Logger } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -96,7 +97,9 @@ export class SessionManager {
       console.log(`[msg] no project found for topicId=${topicId}`);
       return;
     }
-    console.log(`[msg] project=${project.project_name} path=${project.project_path}`);
+    const label = `${this.config.machine_name}:${project.project_name}`;
+    const log: Logger = createLogger(this.config.machine_name, project.project_name);
+    log.log("msg", `topicId=${topicId} path=${project.project_path}`);
 
     this.memory.addConversation({
       topicId,
@@ -110,14 +113,14 @@ export class SessionManager {
     if (debateCtx) {
       prompt = `[Previous debate results for context]\n${debateCtx}\n\n[User's follow-up question]\n${msg.content}`;
       this.debateContext.delete(topicId);
-      console.log(`[msg] injected debate context (${debateCtx.length} chars)`);
+      log.log("msg", `injected debate context (${debateCtx.length} chars)`);
     }
 
     // Inject long-term memory (persona context)
     const personaContext = getSystemPromptContext();
     if (personaContext) {
       prompt = `[Long-term memory]\n${personaContext}\n\n${prompt}`;
-      console.log(`[msg] injected persona context (${personaContext.length} chars)`);
+      log.log("msg", `injected persona context (${personaContext.length} chars)`);
     }
 
     let proc;
@@ -125,16 +128,17 @@ export class SessionManager {
       proc = this.pool.run(topicId, prompt, {
         cwd: project.project_path,
         sessionId: project.session_id ?? undefined,
+        label,
       });
-      console.log(`[claude] running pid=${proc.pid} sessionId=${proc.sessionId}`);
+      log.log("claude", `running pid=${proc.pid} sessionId=${proc.sessionId}`);
     } catch (err) {
-      console.error(`[claude] run failed:`, err);
+      log.error("claude", `run failed: ${err}`);
       await (msg.channel as ThreadChannel).send("Failed to start Claude process.").catch(() => {});
       return;
     }
 
     proc.on("error", (err: string) => {
-      console.error(`[claude] stderr: ${err}`);
+      log.error("claude", `stderr: ${err}`);
     });
 
     if (proc.pid) {
@@ -151,7 +155,7 @@ export class SessionManager {
     };
 
     const onData = async (chunk: StreamChunk) => {
-      console.log(`[stream] chunk: "${chunk.text.slice(0, 100)}" complete=${chunk.isComplete} approval=${chunk.isApproval}`);
+      log.log("stream", `chunk: "${chunk.text.slice(0, 100)}" complete=${chunk.isComplete} approval=${chunk.isApproval}`);
       if (chunk.isComplete && chunk.text) {
         // Result message — replace buffer with authoritative final text
         streamState.buffer = chunk.text;
@@ -191,7 +195,7 @@ export class SessionManager {
     };
 
     const onExit = async (code: number | null) => {
-      console.log(`[claude] exited code=${code} buffer=${streamState.buffer.length} chars`);
+      log.log("claude", `exited code=${code} buffer=${streamState.buffer.length} chars`);
       proc.removeListener("data", onData);
       proc.removeListener("approval", onApproval);
       proc.removeListener("session", onSession);
@@ -232,7 +236,7 @@ export class SessionManager {
         const convCount = this.memory.getConversationCount(topicId);
         if (shouldAutoLearn(convCount, this.config.memory.facet_interval)) {
           this.runAutoLearn(topicId, project).catch((err) =>
-            console.error(`[auto-learn] error:`, err)
+            log.error("auto-learn", `${err}`)
           );
         }
       }
@@ -316,12 +320,14 @@ export class SessionManager {
     const timeoutMs = this.config.memory.analysis_timeout * 1000;
 
     // Stage 1: Extract facets
+    const autoLearnLabel = `${this.config.machine_name}:${project.project_name}`;
     const facet = await extractFacets(
       topicId,
       project.project_name,
       project.project_path,
       this.memory,
-      timeoutMs
+      timeoutMs,
+      autoLearnLabel
     );
 
     if (!facet) return;
@@ -330,7 +336,8 @@ export class SessionManager {
     const aggregation = await runAggregation(
       this.memory,
       this.config.memory.aggregation_threshold,
-      timeoutMs
+      timeoutMs,
+      autoLearnLabel
     );
 
     if (!aggregation) return;
@@ -362,7 +369,7 @@ export class SessionManager {
           );
         }
       } catch (err) {
-        console.error(`[auto-learn] failed to send Discord notification:`, err);
+        console.error(`[auto-learn|${this.config.machine_name}:${project.project_name}] failed to send Discord notification:`, err);
       }
     }
   }

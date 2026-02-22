@@ -3,6 +3,9 @@ dist/
 .env
 .DS_Store
 
+# Logs
+logs/
+
 # Database & runtime data
 *.db
 *.db-wal
