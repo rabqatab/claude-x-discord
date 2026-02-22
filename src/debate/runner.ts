@@ -25,10 +25,11 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
   const logLabel = options.label || "";
   const promises: Promise<DebateResponse>[] = [];
 
-  // Claude CLI — tell it to explore the project
-  const claudePrompt = `You have full access to the project files in the current directory. Read and explore relevant files, then answer this question:\n\n${options.question}`;
+  const prompt = `You have full access to the project files in the current directory. Read and explore relevant files, then answer this question:\n\n${options.question}`;
+
+  // Claude CLI
   promises.push(
-    runBridge("claude", claudePrompt, options.projectPath, {
+    runBridge("claude", prompt, options.projectPath, {
       bin: process.env.CLAUDE_BIN,
       timeoutMs,
       label: logLabel,
@@ -38,7 +39,7 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
   // Gemini CLI
   if (config.debate.gemini_enabled && env.GEMINI_API_KEY) {
     promises.push(
-      runBridge("gemini", options.question, options.projectPath, {
+      runBridge("gemini", prompt, options.projectPath, {
         bin: process.env.GEMINI_BIN,
         extraEnv: { GEMINI_API_KEY: env.GEMINI_API_KEY },
         timeoutMs,
@@ -50,7 +51,7 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
   // Codex CLI
   if (config.debate.codex_enabled && env.CODEX_API_KEY) {
     promises.push(
-      runBridge("codex", options.question, options.projectPath, {
+      runBridge("codex", prompt, options.projectPath, {
         bin: process.env.CODEX_BIN,
         extraEnv: { CODEX_API_KEY: env.CODEX_API_KEY, OPENAI_API_KEY: env.CODEX_API_KEY },
         timeoutMs,
