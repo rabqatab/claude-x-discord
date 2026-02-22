@@ -47,7 +47,7 @@ export async function runDebate(options: DebateOptions, config: Config, env: Env
     promises.push(
       runBridge("codex", options.question, options.projectPath, {
         bin: process.env.CODEX_BIN,
-        extraEnv: { CODEX_API_KEY: env.CODEX_API_KEY },
+        extraEnv: { CODEX_API_KEY: env.CODEX_API_KEY, OPENAI_API_KEY: env.CODEX_API_KEY },
         timeoutMs,
       })
     );
