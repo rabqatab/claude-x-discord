@@ -36,7 +36,7 @@ def build_command(cli, prompt, cwd, bin_path=None, session=None):
 
     elif cli == "codex":
         exe = bin_path or os.environ.get("CODEX_BIN", "codex")
-        model = os.environ.get("CODEX_MODEL", "gpt-5.3-codex")
+        model = os.environ.get("CODEX_MODEL", "gpt-5.2-codex")
         cmd = [exe, "exec", "--json", "--model", model, "--cd", cwd, "--full-auto", "--skip-git-repo-check", prompt]
         return cmd
 
