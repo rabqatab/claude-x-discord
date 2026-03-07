@@ -86,6 +86,8 @@ Discord를 통해 원격으로 Claude Code를 제어하는 경량 데몬. 단일
 | **Memory Engine** | SQLite + FTS5, 대화 이력, 자기진화형 장기 메모리, 자동 교훈 추출 |
 | **Debate Engine** | `/debate` 시 Python 브릿지 경유 3개 CLI 병렬 실행, 결과→debateContext 저장 |
 | **Formatter** | CLI 출력 → Discord 메시지 변환, 하이브리드 출력 (분할 + 파일 첨부), 코드 블록 분할 처리 |
+| **Web Chat Server** | HTTP + SSE 기반 웹 채팅 (인라인 HTML, 토큰 인증, 모바일 최적화) |
+| **File Attachments** | `<<<ATTACH:...>>>` 마커 시스템, 경로 검증, Discord 파일 첨부 |
 
 ---
 
@@ -324,6 +326,7 @@ Discord Server
 | **Project** | `/register` (autocomplete) `/unregister` (case-insensitive) `/projects` |
 | **Session** | `/status` `/reset` `/stop` |
 | **AI** | `/debate` |
+| **Web** | `/rc` (웹 채팅 URL 생성) |
 | **Memory** | `/remember` `/recall` |
 | **Utility** | `/health` `/help` |
 | **Custom** | `~/.claude-x-discord/commands/` 에 `.js` 파일 추가 |
@@ -431,6 +434,11 @@ debate:
   gemini_enabled: true
   codex_enabled: true
 
+web:
+  port: 3848                    # 웹 채팅 서버 포트
+  enabled: true                 # 웹 채팅 활성화 여부
+  token_ttl: 3600               # 토큰 유효 시간 (초, 기본 1시간)
+
 memory:
   auto_learn_interval: 10       # N회 대화마다 자동 학습
   confidence_decay: 0.95
@@ -462,6 +470,110 @@ pm2 start dist/index.js --name claude-x-discord --interpreter $(which node)
 
 ---
 
+## 12. File Attachments
+
+### 12.1 Problem
+
+Discord 2000자 제한으로 파일 내용을 텍스트로 보내기 어려움. "이 파일 보내줘"라고 하면 Claude가 내용을 텍스트로 출력하지만, 긴 파일은 잘리거나 여러 메시지로 분할됨.
+
+### 12.2 Solution: `<<<ATTACH:...>>>` Marker System
+
+시스템 프롬프트에 마커 사용법을 주입. Claude가 파일 전송 요청 시 `<<<ATTACH:/absolute/path>>>` 마커를 출력하면, 세션 매니저가 파일을 읽어 Discord AttachmentBuilder로 전송.
+
+```
+사용자: "pyproject.toml 보내줘"
+Claude 출력: "파일을 첨부합니다.\n<<<ATTACH:/path/to/pyproject.toml>>>"
+                     │
+                     ▼
+세션 매니저 onExit 핸들러:
+  1. 정규식으로 마커 추출: /<<<ATTACH:(\/[^>]+)>>>/g
+  2. 경로 검증: normalize() → 프로젝트 디렉토리 내부만 허용
+  3. 파일 크기 확인: ≤25MB (Discord 제한)
+  4. 최대 10개 파일
+  5. 마커를 버퍼에서 제거
+  6. 텍스트 메시지 전송 후 파일 첨부 전송
+```
+
+### 12.3 Security
+
+| 검증 | 설명 |
+|------|------|
+| 경로 정규화 | `normalize()`로 `..` traversal 공격 방지 |
+| 프로젝트 격리 | `filePath.startsWith(projectRoot)` — 프로젝트 외부 파일 차단 |
+| 크기 제한 | 25MB (Discord 업로드 제한) |
+| 개수 제한 | 최대 10개 파일 per 응답 |
+| 스트리밍 제거 | onData에서도 마커를 제거하여 미리보기에 노출 방지 |
+
+---
+
+## 13. Web Chat (`/rc`)
+
+### 13.1 Problem
+
+Discord의 2000자 제한, 마크다운 렌더링 제약, 모바일에서의 텍스트 입력 불편함.
+
+### 13.2 Solution: SSE 기반 웹 채팅
+
+`/rc` 명령으로 1회용 웹 채팅 URL을 생성. 브라우저에서 접속하면 모바일 최적화된 채팅 페이지 표시. 새로운 의존성 없이 Node.js `http` 모듈만 사용.
+
+### 13.3 Architecture
+
+```
+Discord                     WebChatServer (port 3848)              ClaudePool
+  │                              │                                      │
+  ├── /rc ──────────────────► createToken() ──► ephemeral URL          │
+  │                              │                                      │
+  │                    ┌─────────┤ (브라우저 접속)                       │
+  │                    ▼         │                                      │
+  │              GET /rc         │                                      │
+  │              → 인라인 HTML   │                                      │
+  │              (marked.js CDN) │                                      │
+  │                    │         │                                      │
+  │              EventSource ──► GET /rc/stream (SSE 연결)              │
+  │                    │         │                                      │
+  │              POST /rc/send ──┤──────────────────────────► pool.run()│
+  │                              │                                      │
+  │                              │◄──── onData ─────────────────────────┤
+  │                              │  SSE: {type:"chunk", text:"..."}     │
+  │                              │                                      │
+  │                              │◄──── onApproval ─────────────────────┤
+  │                              │  SSE: {type:"approval", text:"..."}  │
+  │                              │                                      │
+  │              POST /rc/approve│                                      │
+  │                    ──────────┤──────────────────────► proc.approve()│
+  │                              │                                      │
+  │                              │◄──── onExit ─────────────────────────┤
+  │                              │  SSE: {type:"done"}                  │
+```
+
+### 13.4 Routes
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/rc?token=` | GET | 인라인 HTML 채팅 페이지 (모바일 최적화, 다크 테마) |
+| `/rc/send?token=` | POST | 메시지 전송 → Claude 실행. Body: `{"message":"..."}` |
+| `/rc/stream?token=` | GET | SSE 스트리밍 엔드포인트. EventSource로 연결 |
+| `/rc/approve?token=` | POST | 도구 승인/거부. Body: `{"decision":"approve"|"deny"}` |
+
+### 13.5 Token Management
+
+- UUID v4 토큰, `Map<token, {topicId, userId, expiresAt}>`
+- 기본 TTL: 1시간 (`config.web.token_ttl`)
+- 만료 토큰 접근 시 401 반환 + 자동 삭제
+- Ephemeral Discord 응답 (본인만 URL 확인 가능)
+
+### 13.6 Design Choices
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| 프로토콜 | SSE (Server-Sent Events) | WebSocket 대비 단순, `ws` 의존성 불필요, EventSource 자동 재연결 |
+| HTML | 인라인 (서버 코드 내 문자열) | 별도 파일 서빙 불필요, 단일 파일 배포 |
+| 마크다운 | marked.js CDN | 클라이언트 사이드 렌더링, 서버 부담 없음 |
+| 인증 | URL 토큰 | 모바일에서 쿠키/헤더 설정 불편, URL 공유만으로 접속 가능 |
+| Claude 실행 | ClaudePool 재사용 | Discord 세션과 동일한 sessionId 공유 → 대화 연속성 |
+
+---
+
 ## Appendix: Decisions Log
 
 | Decision | Choice | Rationale |
@@ -476,3 +588,7 @@ pm2 start dist/index.js --name claude-x-discord --interpreter $(which node)
 | 출력 포맷 | 하이브리드 (메시지 분할 + 파일 첨부) | 짧은 건 즉시, 긴 건 파일로, 코드 블록 분할 자동 처리 |
 | 설정 관리 | .env (시크릿) + config.yaml (설정) | 역할 분리, `pnpm start` 한 줄 실행 |
 | 스트림 중복 방지 | assistant 텍스트 무시 + result 버퍼 교체 | Claude stream-json 3중 텍스트 전송 문제 해결 |
+| 파일 전송 | `<<<ATTACH:...>>>` 마커 시스템 | Claude가 자연어로 마커를 출력, 시스템이 파일 읽기/첨부. 별도 도구 호출 불필요 |
+| 웹 채팅 프로토콜 | SSE (Server-Sent Events) | WebSocket 대비 단순, `ws` 의존성 불필요, EventSource 자동 재연결 |
+| 웹 채팅 인증 | URL 기반 UUID 토큰 | 모바일 편의성 (URL 탭만으로 접속), ephemeral Discord 응답으로 보안 |
+| 웹 채팅 HTML | 인라인 문자열 | 파일 서빙 라우터 불필요, 단일 파일 배포, CDN marked.js로 마크다운 렌더링 |

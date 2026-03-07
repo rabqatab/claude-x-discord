@@ -12,6 +12,8 @@ Control [Claude Code](https://docs.anthropic.com/en/docs/claude-code) remotely t
   - Stage 1: facet extraction every N conversations
   - Stage 2: aggregation analysis builds user profile and workflow suggestions
   - Persona files (USER.md, PATTERNS.md, LESSONS.md) injected into every prompt
+- **File attachments** — ask Claude to send files, delivered as Discord attachments (path-safe, 25MB limit)
+- **Web chat (`/rc`)** — mobile-friendly web interface with streaming, markdown, and tool approval (SSE-based, token auth)
 - **FTS5 memory search** — `/recall` searches past conversations with full-text search
 - **Custom slash commands** — drop `.js` files in `commands/` directory
 - **Multi-machine support** — run on multiple machines with separate bots/channels
@@ -120,6 +122,7 @@ Then send messages in the created forum thread — Claude Code runs in that proj
 | `/stop` | Stop Claude process |
 | `/reset` | Reset session (new session ID) |
 | `/debate question` | Multi-AI debate (auto-injected into next message) |
+| `/rc` | Get a web chat URL for this project (ephemeral, token-based) |
 | `/remember content` | Store a memory |
 | `/recall query` | Search memories (FTS5) |
 | `/health` | System health check |
@@ -144,6 +147,18 @@ Claude Code CLI (via Python bridge)
 └── Multi-process pool
   │
   ▼
+Web Chat Server (port 3848)
+├── SSE streaming to browser
+├── Token-based auth (ephemeral URLs)
+└── Mobile-friendly inline HTML
+  │
+  ▼
+File Attachments
+├── <<<ATTACH:/path>>> markers in Claude output
+├── Path validation (project-only, ≤25MB)
+└── Discord AttachmentBuilder
+  │
+  ▼
 Auto-learning pipeline
 ├── Stage 1: Facet extraction (every ~10 conversations)
 │   ├── Project lessons → {project}/CLAUDE.md
@@ -160,7 +175,7 @@ Auto-learning pipeline
 ```
 src/
 ├── claude/          # Claude CLI process management + one-shot utility
-├── commands/        # Slash command handlers
+├── commands/        # Slash command handlers (including /rc)
 ├── config/          # Zod schema + YAML loader
 ├── db/              # SQLite databases (sessions, memory)
 ├── debate/          # Multi-AI debate (Claude + Gemini + Codex)
@@ -168,6 +183,7 @@ src/
 ├── formatter/       # Discord message formatting + chunking
 ├── memory/          # Auto-learning pipeline + persona files
 ├── utils/           # Tagged logger with file logging
+├── web/             # Web chat server (SSE, inline HTML, token auth)
 └── session-manager.ts  # Core orchestrator
 ```
 

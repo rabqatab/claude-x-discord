@@ -121,6 +121,11 @@ debate:
   gemini_enabled: true
   codex_enabled: true
 
+web:
+  port: 3848                      # 웹 채팅 서버 포트
+  enabled: true                   # 웹 채팅 활성화
+  token_ttl: 3600                 # 토큰 유효 시간 (초, 기본 1시간)
+
 memory:
   auto_learn_interval: 10         # N회 대화마다 자동 학습
   confidence_decay: 0.95          # 기억 confidence 감쇠율
@@ -230,6 +235,7 @@ pm2 startup    # 시스템 부팅 시 자동 시작
 | `/stop` | Claude 프로세스 중지 |
 | `/reset` | 세션 초기화 (새 session ID) |
 | `/debate question` | 멀티 AI debate (결과는 다음 메시지에 자동 주입) |
+| `/rc` | 웹 채팅 URL 생성 (ephemeral, 토큰 기반 인증) |
 | `/remember content` | 기억 저장 |
 | `/recall query` | 기억 검색 (FTS5 전문 검색) |
 | `/health` | 시스템 상태 확인 |

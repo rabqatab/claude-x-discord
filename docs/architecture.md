@@ -53,12 +53,16 @@ claude-x-discord/
 │   │   ├── health.ts            ← /health
 │   │   ├── remember.ts          ← /remember
 │   │   ├── recall.ts            ← /recall
-│   │   └── debate.ts            ← /debate (결과→debateContext 저장)
+│   │   ├── debate.ts            ← /debate (결과→debateContext 저장)
+│   │   └── rc.ts                ← /rc (웹 채팅 URL 생성, ephemeral 응답)
 │   │
 │   ├── debate/
 │   │   ├── context.ts           ← 프로젝트 팩트 수집 (현재 미사용, CLI가 자체 탐색)
 │   │   ├── runner.ts            ← Python 브릿지 경유 Claude/Gemini/Codex 병렬 실행
 │   │   └── index.ts             ← barrel export
+│   │
+│   ├── web/
+│   │   └── server.ts            ← WebChatServer (HTTP + SSE, 인라인 HTML, 토큰 인증)
 │   │
 │   └── memory/
 │       ├── evolution.ts         ← 자동 학습 트리거 + 교훈 추출
@@ -75,6 +79,8 @@ claude-x-discord/
 │   ├── formatter/index.test.ts
 │   ├── debate/context.test.ts
 │   ├── memory/evolution.test.ts
+│   ├── web/server.test.ts           ← WebChatServer HTTP/SSE/토큰 테스트 (15개)
+│   ├── integration/attachments.test.ts  ← 파일 첨부 마커/보안 테스트 (13개)
 │   └── integration/smoke.test.ts
 │
 ├── .nvmrc                       ← Node 22 지정 (nvm use 자동 선택)
@@ -129,9 +135,46 @@ Discord User Message
                 └── session                    → sessions.updateSession()
                     │
                     ▼ (on exit)
+              <<<ATTACH:...>>> 마커 추출
+                ├── 경로 검증 (프로젝트 내부만, ≤25MB, 최대 10개)
+                ├── 유효 파일 → AttachmentBuilder[]
+                └── 마커를 버퍼에서 제거
+                    │
+                    ▼
               formatForDiscord(buffer)
                 ├── ≤2000자 × 5파트 이하 → 일반 메시지
-                └── >5파트              → 미리보기 2개 + .md 첨부
+                ├── >5파트              → 미리보기 2개 + .md 첨부
+                └── 파일 첨부 → Discord attachment로 전송
+```
+
+### Web Chat Flow (/rc)
+
+```
+/rc 명령어
+        │
+        ▼
+  rc.ts → webServer.createToken(topicId, userId)
+        │
+        ▼
+  ephemeral URL 반환: http://{IP}:3848/rc?token={uuid}
+        │
+        ▼ (브라우저에서 접속)
+  WebChatServer (server.ts)
+        │
+        ├── GET /rc?token=...        → 인라인 HTML 채팅 페이지 (모바일 최적화)
+        ├── GET /rc/stream?token=... → SSE 연결 (EventSource)
+        ├── POST /rc/send?token=...  → ClaudePool.run() → Claude 실행
+        └── POST /rc/approve?token=... → approve/deny
+        │
+        ▼ (Claude 실행 중)
+  SSE로 스트리밍 이벤트 전송
+        ├── chunk  → 텍스트 청크 (실시간)
+        ├── complete → 최종 텍스트
+        ├── approval → 도구 승인 요청
+        └── done   → 응답 완료
+        │
+        ▼
+  토큰 만료 (기본 1시간, config.web.token_ttl)
 ```
 
 ### Debate Flow (/debate)
