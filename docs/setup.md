@@ -164,8 +164,10 @@ pnpm start
 
 시작 시 출력:
 ```
-claude-x-discord starting... [macmini-nick] node=22.22.0
-[logger] file logging → /path/to/logs/macmini-nick-2026-02-22.log
+[logger] file logging → /path/to/logs/macmini-nick-2026-03-07.log
+claude-x-discord starting... [macmini-nick] node=22.14.0
+Web chat server listening on port 3848
+claude-x-discord running
 Discord connected
 Slash commands deployed
 ```
@@ -185,13 +187,13 @@ Node.js v18.19.1 detected. Requires >=v22. Run: nvm use 22
 
 ```bash
 # 실시간 로그 모니터링
-tail -f logs/macmini-nick-2026-02-22.log
+tail -f logs/macmini-nick-2026-03-07.log
 
 # 특정 프로젝트만 필터링
-grep "macmini-nick:myapp" logs/macmini-nick-2026-02-22.log
+grep "macmini-nick:myapp" logs/macmini-nick-2026-03-07.log
 
 # 에러만 필터링
-grep "ERROR" logs/macmini-nick-2026-02-22.log
+grep "ERROR" logs/macmini-nick-2026-03-07.log
 ```
 
 ### 데몬화 (pm2)

@@ -95,6 +95,7 @@ pnpm start
 pm2는 NVM을 자동 로드하지 않으므로, Node 22 바이너리의 전체 경로를 사용합니다:
 
 ```bash
+nvm use 22
 npm install -g pm2
 pm2 start dist/index.js --name claude-x-discord --interpreter $(which node)
 pm2 save && pm2 startup
