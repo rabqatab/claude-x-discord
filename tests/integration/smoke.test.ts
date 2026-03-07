@@ -20,6 +20,7 @@ describe("Integration smoke test", () => {
     });
     expect(config.claude.max_processes).toBe(7);
     expect(config.models.claude).toBe("claude-opus-4-6");
+    expect(config.web.port).toBe(3848);
 
     // Sessions DB
     const sessions = new SessionsDB(":memory:");

@@ -17,6 +17,10 @@ describe("configSchema", () => {
     expect(result.claude.idle_timeout).toBe(1800);
     expect(result.claude.max_processes).toBe(7);
     expect(result.models.claude).toBe("claude-opus-4-6");
+    // Web defaults
+    expect(result.web.port).toBe(3848);
+    expect(result.web.enabled).toBe(true);
+    expect(result.web.token_ttl).toBe(3600);
   });
 
   it("rejects missing discord config", () => {
