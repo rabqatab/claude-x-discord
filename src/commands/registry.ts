@@ -13,6 +13,7 @@ export interface CommandContext {
   forum: import("../discord/forum.js").ForumManager;
   config: import("../config/schema.js").Config;
   debateContext: Map<string, string>;
+  webServer?: import("../web/server.js").WebChatServer;
 }
 
 export class CommandRegistry {

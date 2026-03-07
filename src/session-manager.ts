@@ -13,8 +13,8 @@ import { shouldAutoLearn, extractFacets, runAggregation } from "./memory/evoluti
 import { getSystemPromptContext } from "./memory/persona.js";
 import { createLogger, type Logger } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, statSync, readFileSync } from "node:fs";
+import { resolve, normalize } from "node:path";
 
 export class SessionManager {
   private gateway: DiscordGateway;
@@ -25,6 +25,9 @@ export class SessionManager {
   private commands!: CommandRegistry;
   private pendingApprovals = new Map<string, string>();
   private debateContext = new Map<string, string>();
+  // Per-topic message queue: if Claude is running, queue follow-ups instead of killing
+  private messageQueue = new Map<string, Message[]>();
+  private _webServer?: import("./web/server.js").WebChatServer;
 
   constructor(
     private config: Config,
@@ -51,6 +54,7 @@ export class SessionManager {
   get memoryDB(): MemoryDB { return this.memory; }
   get claudePool(): ClaudePool { return this.pool; }
   get forumManager(): ForumManager { return this.forum; }
+  set webServer(ws: import("./web/server.js").WebChatServer) { this._webServer = ws; }
 
   async start(): Promise<void> {
     this.commands = await createCommandRegistry();
@@ -107,6 +111,18 @@ export class SessionManager {
       content: msg.content,
     });
 
+    // If Claude is already running for this topic, queue instead of killing
+    const existingProc = this.pool.get(topicId);
+    if (existingProc?.isAlive) {
+      const queue = this.messageQueue.get(topicId) || [];
+      queue.push(msg);
+      this.messageQueue.set(topicId, queue);
+      const channel = msg.channel as ThreadChannel;
+      await channel.send(`⏳ Processing previous request... your message has been queued (#${queue.length}).`).catch(() => {});
+      log.log("msg", `queued (${queue.length} pending) — Claude is still running`);
+      return;
+    }
+
     // Inject debate context if available
     let prompt = msg.content;
     const debateCtx = this.debateContext.get(topicId);
@@ -122,6 +138,9 @@ export class SessionManager {
       prompt = `[Long-term memory]\n${personaContext}\n\n${prompt}`;
       log.log("msg", `injected persona context (${personaContext.length} chars)`);
     }
+
+    // Inject Discord remote context — Claude must know it's communicating via Discord
+    prompt = `[System context]\nYou are communicating with the user via Discord. The user is on a remote device and CANNOT see your terminal, editor, or local filesystem output. ALL content (file contents, code, results) MUST be included directly in your text response. NEVER suggest commands like cat, pbcopy, open, or refer to "terminal output" — the user cannot access it. If content is long, send it in parts.\n\nWhen the user asks you to SEND a file (e.g. "send me X", "attach X", "give me the file X"), output the marker <<<ATTACH:/absolute/path/to/file>>> on its own line. The system will read the file from disk and deliver it as a Discord attachment. You may include multiple markers for multiple files. Only use absolute paths within the project directory.\n\n${prompt}`;
 
     let proc;
     try {
@@ -167,7 +186,10 @@ export class SessionManager {
       if (now - streamState.lastEdit < this.config.claude.streaming_debounce) return;
       streamState.lastEdit = now;
       try {
-        const preview = streamState.buffer.slice(0, 1900);
+        let preview = streamState.buffer.replace(/<<<ATTACH:\/[^>]+>>>/g, "").slice(0, 1900);
+        if (streamState.buffer.length > 1900) {
+          preview += `\n\n_... generating (${streamState.buffer.length.toLocaleString()} chars so far)_`;
+        }
         if (!streamState.messageId) {
           const sent = await channel.send(preview);
           streamState.messageId = sent.id;
@@ -200,6 +222,36 @@ export class SessionManager {
       proc.removeListener("data", onData);
       proc.removeListener("approval", onApproval);
       proc.removeListener("session", onSession);
+
+      // Extract file attachment markers
+      const attachMarkerRe = /<<<ATTACH:(\/[^>]+)>>>/g;
+      const fileAttachments: AttachmentBuilder[] = [];
+      const projectRoot = normalize(project.project_path);
+      let match: RegExpExecArray | null;
+      while ((match = attachMarkerRe.exec(streamState.buffer)) !== null) {
+        if (fileAttachments.length >= 10) break;
+        const filePath = normalize(match[1]);
+        if (!filePath.startsWith(projectRoot)) {
+          log.log("attach", `rejected (outside project): ${filePath}`);
+          continue;
+        }
+        try {
+          const stat = statSync(filePath);
+          if (!stat.isFile() || stat.size > 25 * 1024 * 1024) {
+            log.log("attach", `rejected (not file or >25MB): ${filePath}`);
+            continue;
+          }
+          fileAttachments.push(new AttachmentBuilder(readFileSync(filePath), {
+            name: filePath.split("/").pop() || "file",
+          }));
+          log.log("attach", `queued: ${filePath} (${stat.size} bytes)`);
+        } catch {
+          log.log("attach", `rejected (read error): ${filePath}`);
+        }
+      }
+      // Strip markers from buffer
+      streamState.buffer = streamState.buffer.replace(/<<<ATTACH:\/[^>]+>>>/g, "").trim();
+
       if (streamState.buffer) {
         const formatted = formatForDiscord(streamState.buffer);
         try {
@@ -226,6 +278,10 @@ export class SessionManager {
             );
             await channel.send({ files: [attachment] });
           }
+          // Send file attachments from <<<ATTACH:...>>> markers
+          if (fileAttachments.length > 0) {
+            await channel.send({ files: fileAttachments });
+          }
         } catch { /* channel may be gone */ }
         this.memory.addConversation({
           topicId,
@@ -242,6 +298,18 @@ export class SessionManager {
         }
       }
       this.sessions.setStatus(topicId, "idle");
+
+      // Process queued messages (take the LAST one — most recent intent)
+      const queue = this.messageQueue.get(topicId);
+      if (queue && queue.length > 0) {
+        const nextMsg = queue[queue.length - 1];  // Latest message = latest intent
+        this.messageQueue.delete(topicId);
+        log.log("msg", `dequeuing message (dropped ${queue.length - 1} older queued)`);
+        // Process asynchronously — don't block exit handler
+        this.handleMessage(nextMsg).catch((err) =>
+          log.error("msg", `failed to process queued message: ${err}`)
+        );
+      }
     };
 
     proc.on("data", onData);
@@ -285,6 +353,7 @@ export class SessionManager {
         forum: this.forum,
         config: this.config,
         debateContext: this.debateContext,
+        webServer: this._webServer,
       });
     } catch (err) {
       console.error(`Command error [${interaction.commandName}]:`, err);
@@ -308,6 +377,7 @@ export class SessionManager {
         forum: this.forum,
         config: this.config,
         debateContext: this.debateContext,
+        webServer: this._webServer,
       });
     } catch (err) {
       console.error(`Autocomplete error [${interaction.commandName}]:`, err);

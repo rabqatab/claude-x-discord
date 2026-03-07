@@ -1,5 +1,6 @@
 import { loadConfig, loadEnv } from "./config/index.js";
 import { SessionManager } from "./session-manager.js";
+import { WebChatServer } from "./web/server.js";
 import { initFileLogging } from "./utils/logger.js";
 
 const NODE_MAJOR_MIN = 22;
@@ -22,13 +23,20 @@ async function main() {
 
   const manager = new SessionManager(config, env);
 
+  // Start web chat server
+  const webServer = new WebChatServer(manager.claudePool, manager.sessionsDB, config);
+  manager.webServer = webServer;
+  await webServer.start();
+
   process.on("SIGINT", async () => {
     console.log("Shutting down...");
+    await webServer.stop();
     await manager.stop();
     process.exit(0);
   });
 
   process.on("SIGTERM", async () => {
+    await webServer.stop();
     await manager.stop();
     process.exit(0);
   });

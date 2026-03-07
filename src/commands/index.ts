@@ -10,6 +10,7 @@ import { healthCommand } from "./health.js";
 import { rememberCommand } from "./remember.js";
 import { recallCommand } from "./recall.js";
 import { debateCommand } from "./debate.js";
+import { rcCommand } from "./rc.js";
 import { loadCustomCommands } from "./custom-loader.js";
 
 export async function createCommandRegistry(): Promise<CommandRegistry> {
@@ -25,6 +26,7 @@ export async function createCommandRegistry(): Promise<CommandRegistry> {
   registry.register(rememberCommand);
   registry.register(recallCommand);
   registry.register(debateCommand);
+  registry.register(rcCommand);
 
   // Load user-defined custom commands from commands/ directory
   const custom = await loadCustomCommands();

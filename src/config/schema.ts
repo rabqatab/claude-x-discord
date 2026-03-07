@@ -22,6 +22,11 @@ export const configSchema = z.object({
     gemini_enabled: z.boolean().default(true),
     codex_enabled: z.boolean().default(true),
   }),
+  web: z.object({
+    port: z.number().default(3848),
+    enabled: z.boolean().default(true),
+    token_ttl: z.number().default(3600),
+  }),
   memory: z.object({
     auto_learn_interval: z.number().default(10),
     confidence_decay: z.number().default(0.95),
