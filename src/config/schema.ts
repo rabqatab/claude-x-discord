@@ -15,7 +15,7 @@ export const configSchema = z.object({
   models: z.object({
     claude: z.string().default("claude-opus-4-6"),
     gemini: z.string().default("gemini-3.1-pro"),
-    codex: z.string().default("gpt-5.3-codex"),
+    codex: z.string().default("gpt-5.2-codex"),
   }),
   debate: z.object({
     timeout: z.number().default(60),

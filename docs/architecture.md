@@ -5,7 +5,8 @@
 ```
 claude-x-discord/
 ├── scripts/
-│   └── claude-bridge.py        ← Python 브릿지 (Node→Python→CLI stdout 릴레이)
+│   ├── claude-bridge.py        ← Python 브릿지 (Node→Python→CLI stdout 릴레이)
+│   └── rc-bridge.py            ← Remote Control PTY 브릿지 (TUI stdout 릴레이)
 │
 ├── src/
 │   ├── index.ts                 ← 엔트리포인트 (main)
@@ -20,6 +21,7 @@ claude-x-discord/
 │   │   ├── parser.ts            ← stream-json 청크 파싱 (승인 요청/세션ID 감지)
 │   │   ├── process.ts           ← ClaudeProcess (Python 브릿지 wrapper, EventEmitter)
 │   │   ├── pool.ts              ← ClaudePool (메시지별 프로세스 생성/관리)
+│   │   ├── remote-control.ts    ← spawnRemoteControl() (RC PTY 브릿지 spawn + URL 파싱)
 │   │   └── index.ts             ← barrel export
 │   │
 │   ├── discord/
@@ -54,7 +56,7 @@ claude-x-discord/
 │   │   ├── remember.ts          ← /remember
 │   │   ├── recall.ts            ← /recall
 │   │   ├── debate.ts            ← /debate (결과→debateContext 저장)
-│   │   └── rc.ts                ← /rc (웹 채팅 URL 생성, ephemeral 응답)
+│   │   └── rc.ts                ← /rc (Claude Code Remote Control 세션 시작)
 │   │
 │   ├── debate/
 │   │   ├── context.ts           ← 프로젝트 팩트 수집 (현재 미사용, CLI가 자체 탐색)
@@ -106,8 +108,8 @@ Discord User Message
    ├── Button Click?  ──► SessionManager.handleButton()
    └── Message?       ──► SessionManager.handleMessage()
                               │
-                    ┌─────────┤ debateContext 확인
-                    │         │ (있으면 prompt에 선행 주입)
+                    ┌─────────┤ Claude 실행 중? → queue에 보관 (최신만 처리)
+                    │         │ debateContext 확인 (있으면 prompt에 선행 주입)
                     ▼
             SessionsDB.getProjectByTopicId()
                     │
@@ -147,35 +149,35 @@ Discord User Message
                 └── 파일 첨부 → Discord attachment로 전송
 ```
 
-### Web Chat Flow (/rc)
+### Remote Control Flow (/rc)
 
 ```
 /rc 명령어
         │
         ▼
-  rc.ts → webServer.createToken(topicId, userId)
+  rc.ts → spawnRemoteControl(project_path, project_name)
         │
         ▼
-  ephemeral URL 반환: http://{IP}:3848/rc?token={uuid}
-        │
-        ▼ (브라우저에서 접속)
-  WebChatServer (server.ts)
-        │
-        ├── GET /rc?token=...        → 인라인 HTML 채팅 페이지 (모바일 최적화)
-        ├── GET /rc/stream?token=... → SSE 연결 (EventSource)
-        ├── POST /rc/send?token=...  → ClaudePool.run() → Claude 실행
-        └── POST /rc/approve?token=... → approve/deny
-        │
-        ▼ (Claude 실행 중)
-  SSE로 스트리밍 이벤트 전송
-        ├── chunk  → 텍스트 청크 (실시간)
-        ├── complete → 최종 텍스트
-        ├── approval → 도구 승인 요청
-        └── done   → 응답 완료
+  rc-bridge.py (PTY 할당 + claude remote-control 실행)
         │
         ▼
-  토큰 만료 (기본 1시간, config.web.token_ttl)
+  claude remote-control --name "ProjectName"
+        │  (Anthropic 서버에 outbound 연결, inbound 포트 불필요)
+        ▼
+  stdout에서 URL 파싱: https://claude.ai/code/session_...?bridge=env_...
+        │
+        ▼
+  ephemeral Discord 응답으로 URL 반환
+        │
+        ▼ (브라우저/모바일에서 접속)
+  claude.ai/code → 로컬 Claude 프로세스로 터널링
+        │  (Full Claude Code UI: 파일 편집, 도구, MCP 서버 등)
+        │
+        ▼
+  /stop 또는 프로세스 종료 시 세션 정리
 ```
+
+Note: WebChatServer (server.ts)는 별도로 계속 동작한다 (포트 3848). RC와 무관.
 
 ### Debate Flow (/debate)
 
@@ -212,6 +214,14 @@ Node.js에서 Claude CLI를 `child_process.spawn()`으로 직접 실행하면 st
 Node.js → Python → CLI → stdout → Python → Node.js 순서로 데이터 전달.
 동일한 브릿지가 claude, gemini, codex 세 CLI 모두를 지원.
 
+**PTY**: Claude CLI는 `stdin.isTTY`를 검사하여 pipe stdin이면 입력 대기에 빠짐. PTY(`pty.openpty()`)로 isTTY=true 보장. Gemini/Codex는 `DEVNULL`.
+
+**Threading**: 3개 daemon 스레드(stdout/stderr/stdin relay) + 메인 스레드(`proc.wait()`). CLI 자식 프로세스가 stdout pipe를 상속하면 blocking read가 멈출 수 있어, stdout을 daemon 스레드로 분리하고 `proc.wait()` 반환 후 2초 drain → `os._exit()`.
+
+### Message Queue
+
+Claude 실행 중 추가 메시지 도착 시 queue에 보관. 완료 후 가장 최신 메시지만 처리하고 이전 것은 폐기 (latest intent wins).
+
 ### Per-Message Process Spawn
 
 stdin pipe 방식 대신, 매 메시지마다 새 프로세스를 생성하고 `--resume sessionId`로 이전 컨텍스트를 복원.
@@ -239,7 +249,7 @@ Claude/Gemini/Codex 프로세스만 별도 child_process. pm2로 데몬화.
 ### Hybrid Formatter
 
 Discord 2000자 제한 대응. 짧은 응답은 즉시 표시, 긴 응답은 미리보기 + `.md` 파일 첨부.
-코드 블록 분할 시 자동으로 닫기/열기 처리.
+코드 블록 분할 시 자동으로 닫기/열기 처리. Markdown 테이블은 코드 블록으로 변환 (Discord 미지원).
 
 ### Stream Deduplication
 

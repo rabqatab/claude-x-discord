@@ -3,7 +3,7 @@ import { type Command, type CommandContext } from "./registry.js";
 
 const categories: Record<string, string[]> = {
   "Project Management": ["register", "unregister", "projects"],
-  "Session Control": ["stop", "reset", "status"],
+  "Session Control": ["stop", "reset", "status", "rc"],
   "AI Features": ["debate", "remember", "recall"],
   "System": ["health", "help"],
 };

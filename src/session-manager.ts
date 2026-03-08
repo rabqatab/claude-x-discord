@@ -28,6 +28,7 @@ export class SessionManager {
   // Per-topic message queue: if Claude is running, queue follow-ups instead of killing
   private messageQueue = new Map<string, Message[]>();
   private _webServer?: import("./web/server.js").WebChatServer;
+  private rcProcesses = new Map<string, import("node:child_process").ChildProcess>();
 
   constructor(
     private config: Config,
@@ -140,7 +141,7 @@ export class SessionManager {
     }
 
     // Inject Discord remote context — Claude must know it's communicating via Discord
-    prompt = `[System context]\nYou are communicating with the user via Discord. The user is on a remote device and CANNOT see your terminal, editor, or local filesystem output. ALL content (file contents, code, results) MUST be included directly in your text response. NEVER suggest commands like cat, pbcopy, open, or refer to "terminal output" — the user cannot access it. If content is long, send it in parts.\n\nWhen the user asks you to SEND a file (e.g. "send me X", "attach X", "give me the file X"), output the marker <<<ATTACH:/absolute/path/to/file>>> on its own line. The system will read the file from disk and deliver it as a Discord attachment. You may include multiple markers for multiple files. Only use absolute paths within the project directory.\n\n${prompt}`;
+    prompt = `[System context]\nYou are communicating with the user via Discord. The user is on a remote device and CANNOT see your terminal, editor, or local filesystem output. ALL content (file contents, code, results) MUST be included directly in your text response. NEVER suggest commands like cat, pbcopy, open, or refer to "terminal output" — the user cannot access it. If content is long, send it in parts.\n\nWhen the user asks you to SEND a file (e.g. "send me X", "attach X", "give me the file X"), output the marker <<<ATTACH:/absolute/path/to/file>>> on its own line. The system will read the file from disk and deliver it as a Discord attachment. You may include multiple markers for multiple files. Only use absolute paths within the project directory.\n\nYou are running non-interactively via -p flag, so Claude Code slash commands like /rc (Remote Control) are unavailable. The following Discord slash commands exist but can ONLY be typed by the user directly in the Discord channel — you cannot execute them: /register, /unregister, /projects, /status, /stop, /reset, /debate, /rc (web chat URL), /remember, /recall, /health, /help. If the user asks about these, tell them to type the command directly.\n\n${prompt}`;
 
     let proc;
     try {
@@ -354,6 +355,7 @@ export class SessionManager {
         config: this.config,
         debateContext: this.debateContext,
         webServer: this._webServer,
+        rcProcesses: this.rcProcesses,
       });
     } catch (err) {
       console.error(`Command error [${interaction.commandName}]:`, err);
@@ -378,6 +380,7 @@ export class SessionManager {
         config: this.config,
         debateContext: this.debateContext,
         webServer: this._webServer,
+        rcProcesses: this.rcProcesses,
       });
     } catch (err) {
       console.error(`Autocomplete error [${interaction.commandName}]:`, err);
@@ -446,6 +449,10 @@ export class SessionManager {
   }
 
   async stop(): Promise<void> {
+    for (const [id, proc] of this.rcProcesses) {
+      proc.kill("SIGTERM");
+      this.rcProcesses.delete(id);
+    }
     this.pool.stopAll();
     this.sessions.close();
     this.memory.close();

@@ -113,10 +113,8 @@ def main():
                 os.close(master_fd)
             except OSError:
                 pass
-        try:
-            sys.stdin.close()
-        except Exception:
-            pass
+        # os._exit() terminates immediately — no need to close stdin
+        # (closing stdin deadlocks when relay_stdin thread holds the buffer lock)
         os._exit(0)
     signal.signal(signal.SIGTERM, handle_signal)
 
@@ -174,15 +172,10 @@ def main():
         except OSError:
             pass
 
-    # Close stdin to unblock the relay_stdin daemon thread before exit.
-    # Without this, the daemon thread holds a lock on the BufferedReader
-    # and Python's interpreter shutdown triggers a fatal error:
-    #   _enter_buffered_busy: could not acquire lock for <_io.BufferedReader name='<stdin>'>
-    try:
-        sys.stdin.close()
-    except Exception:
-        pass
-
+    # os._exit() terminates immediately without Python cleanup — daemon
+    # threads and their buffer locks are irrelevant.  Do NOT call
+    # sys.stdin.close() here: the relay_stdin thread holds the
+    # BufferedReader lock, so close() deadlocks waiting for it.
     os._exit(proc.returncode or 0)
 
 

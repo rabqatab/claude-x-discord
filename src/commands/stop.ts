@@ -3,7 +3,7 @@ import { type Command, type CommandContext } from "./registry.js";
 
 const data = new SlashCommandBuilder()
   .setName("stop")
-  .setDescription("Stop the Claude process for the current topic");
+  .setDescription("Stop the Claude process and/or Remote Control for the current topic");
 
 async function execute(interaction: ChatInputCommandInteraction, ctx: CommandContext): Promise<void> {
   const topicId = interaction.channelId;
@@ -15,15 +15,30 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: CommandCon
   }
 
   const proc = ctx.pool.get(topicId);
-  if (!proc || !proc.isAlive) {
-    await interaction.reply({ content: "No active process for this topic.", ephemeral: true });
+  const hasPool = proc?.isAlive ?? false;
+  const hasRc = ctx.rcProcesses.has(topicId);
+
+  if (!hasPool && !hasRc) {
+    await interaction.reply({ content: "No active process or Remote Control for this topic.", ephemeral: true });
     return;
   }
 
-  ctx.pool.kill(topicId);
-  ctx.sessions.setStatus(topicId, "idle");
+  const stopped: string[] = [];
 
-  await interaction.reply("Stopped the Claude process for this topic.");
+  if (hasPool) {
+    ctx.pool.kill(topicId);
+    ctx.sessions.setStatus(topicId, "idle");
+    stopped.push("Claude process");
+  }
+
+  if (hasRc) {
+    const rcProc = ctx.rcProcesses.get(topicId)!;
+    rcProc.kill("SIGTERM");
+    ctx.rcProcesses.delete(topicId);
+    stopped.push("Remote Control session");
+  }
+
+  await interaction.reply(`Stopped ${stopped.join(" and ")} for this topic.`);
 }
 
 export const stopCommand: Command = { data, execute };

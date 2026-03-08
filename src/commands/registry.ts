@@ -1,4 +1,5 @@
 import { REST, Routes, type ChatInputCommandInteraction, type AutocompleteInteraction, SlashCommandBuilder } from "discord.js";
+import { type ChildProcess } from "node:child_process";
 
 export interface Command {
   data: SlashCommandBuilder;
@@ -14,6 +15,7 @@ export interface CommandContext {
   config: import("../config/schema.js").Config;
   debateContext: Map<string, string>;
   webServer?: import("../web/server.js").WebChatServer;
+  rcProcesses: Map<string, ChildProcess>;
 }
 
 export class CommandRegistry {

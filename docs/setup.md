@@ -107,17 +107,17 @@ discord:
     - "YOUR_DISCORD_USER_ID"
 
 claude:
-  idle_timeout: 3000              # 유휴 타이머 (초). 실제로 프로세스는 메시지별 종료
-  max_processes: 20               # 동시 Claude 프로세스 수
+  idle_timeout: 1800              # 유휴 타이머 (초, 기본 30분). 프로세스는 메시지별 종료
+  max_processes: 7                # 동시 Claude 프로세스 수
   streaming_debounce: 1000        # 스트리밍 업데이트 간격 (ms)
 
 models:
   claude: "claude-opus-4-6"
   gemini: "gemini-3.1-pro"
-  codex: "gpt-5.3-codex"
+  codex: "gpt-5.2-codex"
 
 debate:
-  timeout: 300                    # 각 AI 응답 타임아웃 (초)
+  timeout: 60                     # 각 AI 응답 타임아웃 (초)
   gemini_enabled: true
   codex_enabled: true
 
@@ -129,6 +129,9 @@ web:
 memory:
   auto_learn_interval: 10         # N회 대화마다 자동 학습
   confidence_decay: 0.95          # 기억 confidence 감쇠율
+  facet_interval: 10              # N회 대화마다 facet 추출
+  aggregation_threshold: 5        # N개 facet 누적 시 aggregation 실행
+  analysis_timeout: 120           # 분석 타임아웃 (초)
 ```
 
 ## 4. Discord Bot Setup
@@ -234,10 +237,10 @@ pm2 startup    # 시스템 부팅 시 자동 시작
 | `/unregister name` | 프로젝트 등록 해제 (case-insensitive, 유사 이름 제안) |
 | `/projects` | 등록된 프로젝트 목록 [machine_name] |
 | `/status` | 현재 Claude 프로세스 상태 |
-| `/stop` | Claude 프로세스 중지 |
+| `/stop` | Claude 프로세스 및 Remote Control 중지 |
 | `/reset` | 세션 초기화 (새 session ID) |
 | `/debate question` | 멀티 AI debate (결과는 다음 메시지에 자동 주입) |
-| `/rc` | 웹 채팅 URL 생성 (ephemeral, 토큰 기반 인증) |
+| `/rc` | Claude Code Remote Control 세션 시작 (claude.ai/code에서 Full UI) |
 | `/remember content` | 기억 저장 |
 | `/recall query` | 기억 검색 (FTS5 전문 검색) |
 | `/health` | 시스템 상태 확인 |

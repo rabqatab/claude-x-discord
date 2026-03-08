@@ -38,7 +38,7 @@ Discord를 통해 원격으로 Claude Code를 제어하는 경량 데몬. 단일
 |----|-------|
 | Claude | `claude-opus-4-6` (CLI 기본값) |
 | Gemini | `gemini-3.1-pro` |
-| Codex/OpenAI | `gpt-5.3-codex` |
+| Codex/OpenAI | `gpt-5.2-codex` |
 
 ---
 
@@ -86,6 +86,7 @@ Discord를 통해 원격으로 Claude Code를 제어하는 경량 데몬. 단일
 | **Memory Engine** | SQLite + FTS5, 대화 이력, 자기진화형 장기 메모리, 자동 교훈 추출 |
 | **Debate Engine** | `/debate` 시 Python 브릿지 경유 3개 CLI 병렬 실행, 결과→debateContext 저장 |
 | **Formatter** | CLI 출력 → Discord 메시지 변환, 하이브리드 출력 (분할 + 파일 첨부), 코드 블록 분할 처리 |
+| **Remote Control** | `claude remote-control` spawn + PTY 브릿지, claude.ai/code에서 Full Claude Code UI 제공 |
 | **Web Chat Server** | HTTP + SSE 기반 웹 채팅 (인라인 HTML, 토큰 인증, 모바일 최적화) |
 | **File Attachments** | `<<<ATTACH:...>>>` 마커 시스템, 경로 검증, Discord 파일 첨부 |
 
@@ -103,14 +104,16 @@ Node.js                 Python Bridge              Claude CLI
   │                         │                          │
   ├─ spawn python3 ────────►│                          │
   │   claude-bridge.py      ├─ subprocess.Popen() ────►│
-  │                         │   (stdin=PIPE)           │
+  │                         │   (stdin=PTY for Claude) │
+  │                         │   (stdin=DEVNULL others) │
   │                         │                          │
-  │──── "y\n" (approve) ──►│──── stdin relay ─────────►│  ← approve/deny
+  │──── "y\n" (approve) ──►│──── PTY relay thread ───►│  ← approve/deny
   │                         │                          │
-  │                         │◄──── stdout (JSON) ──────┤
+  │                         │◄──── stdout (JSON) ──────┤  ← stdout thread (daemon)
   │◄──── stdout relay ──────┤                          │
   │                         │                          │
-  │◄──── exit code ─────────┤◄──── exit ───────────────┤
+  │   stdin.end() ──────────┤  proc.wait() ◄───────────┤  ← CLI exits
+  │◄──── exit event ────────┤  os._exit() (2s drain)   │
 ```
 
 ### 3.2 Process Lifecycle (Per-Message)
@@ -118,11 +121,27 @@ Node.js                 Python Bridge              Claude CLI
 1. **생성**: 사용자 메시지 도착 → `ClaudePool.run()` → `ClaudeProcess.run(prompt)` → Python 브릿지 spawn
 2. **실행**: `claude -p "{prompt}" --output-format stream-json --verbose --cwd {path} --resume {sessionId}`
 3. **스트리밍**: stdout JSON lines → `parseJsonStreamChunk()` → Discord 메시지 edit (디바운스)
-4. **종료**: Claude 응답 완료 → 프로세스 exit → 최종 포맷팅 → Discord 전송
+4. **종료**: Claude CLI exit → bridge `proc.wait()` 반환 → stdout 2초 drain → `os._exit()` → Node.js `exit` 이벤트 → 최종 포맷팅 → Discord 전송
 5. **재개**: 다음 메시지 → 같은 `--resume sessionId`로 새 프로세스 spawn → 컨텍스트 유지
+6. **대기열**: Claude 실행 중 추가 메시지 도착 시 queue에 보관, 완료 후 최신 메시지만 처리 (이전 것 폐기)
 
 각 메시지마다 새 프로세스를 생성하고, `--resume` 플래그로 이전 세션 컨텍스트를 복원한다.
 stdin pipe 방식이 아닌 `-p` 플래그로 프롬프트를 전달한다.
+
+### 3.2.1 Bridge Threading Model
+
+Python 브릿지는 3개 daemon 스레드 + 메인 스레드로 동작:
+
+| Thread | Role |
+|--------|------|
+| **Main** | `proc.wait()`로 CLI 종료 대기 → stdout drain (2초) → `os._exit()` |
+| **stdout** (daemon) | `proc.stdout` line-by-line 읽기 → `os.write(1, line)` (Node.js로 릴레이) |
+| **stderr** (daemon) | `proc.stderr` 읽기 → 로그 출력 |
+| **stdin relay** (daemon) | `sys.stdin.buffer` → PTY master fd (approve/deny 릴레이) |
+
+**PTY 사용 이유**: Claude CLI는 `stdin.isTTY`를 검사하며, pipe stdin일 때 `-p` 플래그가 있어도 입력 대기 상태에 빠짐. PTY(`pty.openpty()`)로 isTTY=true를 보장.
+
+**`os._exit()` 사용 이유**: CLI가 agent teams/MCP 서버 등 자식 프로세스를 생성하면 stdout pipe가 유지되어 blocking read가 영원히 멈출 수 있음. `proc.wait()`가 반환되면 2초 drain 후 즉시 종료. `sys.stdin.close()`는 호출하지 않음 — `relay_stdin` daemon 스레드가 `BufferedReader` lock을 잡고 있어 deadlock 발생.
 
 ### 3.3 Streaming Strategy
 
@@ -232,7 +251,7 @@ Discord Server
         │      Python bridge → gemini -p "{prompt}" --output-format json
         │
         └──► runBridge("codex", prompt, projectPath)    [config.debate.codex_enabled]
-               Python bridge → codex exec --json --model gpt-5.3-codex --cd {cwd} "{prompt}"
+               Python bridge → codex exec --json --model gpt-5.2-codex --cd {cwd} "{prompt}"
         │
         ▼ (Promise.allSettled)
   결과 파싱
@@ -324,9 +343,8 @@ Discord Server
 | Category | Commands |
 |----------|----------|
 | **Project** | `/register` (autocomplete) `/unregister` (case-insensitive) `/projects` |
-| **Session** | `/status` `/reset` `/stop` |
+| **Session** | `/status` `/reset` `/stop` `/rc` (Remote Control) |
 | **AI** | `/debate` |
-| **Web** | `/rc` (웹 채팅 URL 생성) |
 | **Memory** | `/remember` `/recall` |
 | **Utility** | `/health` `/help` |
 | **Custom** | `~/.claude-x-discord/commands/` 에 `.js` 파일 추가 |
@@ -420,17 +438,17 @@ discord:
   allowed_user_ids: ["your_discord_id"]
 
 claude:
-  idle_timeout: 3000
-  max_processes: 20
-  streaming_debounce: 1000
+  idle_timeout: 1800            # 유휴 타이머 (초, 기본 30분)
+  max_processes: 7              # 동시 Claude 프로세스 수
+  streaming_debounce: 1000      # 스트리밍 업데이트 간격 (ms)
 
 models:
   claude: "claude-opus-4-6"
   gemini: "gemini-3.1-pro"
-  codex: "gpt-5.3-codex"
+  codex: "gpt-5.2-codex"
 
 debate:
-  timeout: 300                  # 각 AI 응답 타임아웃 (초)
+  timeout: 60                   # 각 AI 응답 타임아웃 (초)
   gemini_enabled: true
   codex_enabled: true
 
@@ -441,7 +459,10 @@ web:
 
 memory:
   auto_learn_interval: 10       # N회 대화마다 자동 학습
-  confidence_decay: 0.95
+  confidence_decay: 0.95        # 기억 confidence 감쇠율
+  facet_interval: 10            # N회 대화마다 facet 추출
+  aggregation_threshold: 5      # N개 facet 누적 시 aggregation 실행
+  analysis_timeout: 120         # 분석 타임아웃 (초)
 ```
 
 ### 11.4 Execution
@@ -506,71 +527,64 @@ Claude 출력: "파일을 첨부합니다.\n<<<ATTACH:/path/to/pyproject.toml>>>
 
 ---
 
-## 13. Web Chat (`/rc`)
+## 13. Remote Control (`/rc`)
 
 ### 13.1 Problem
 
-Discord의 2000자 제한, 마크다운 렌더링 제약, 모바일에서의 텍스트 입력 불편함.
+Discord의 2000자 제한, 마크다운 렌더링 제약, 모바일에서의 코드 리뷰/편집 불편함. 기존 SSE 웹 채팅은 제한된 UI만 제공.
 
-### 13.2 Solution: SSE 기반 웹 채팅
+### 13.2 Solution: Claude Code Remote Control
 
-`/rc` 명령으로 1회용 웹 채팅 URL을 생성. 브라우저에서 접속하면 모바일 최적화된 채팅 페이지 표시. 새로운 의존성 없이 Node.js `http` 모듈만 사용.
+`/rc` 명령으로 `claude remote-control`을 spawn. Anthropic 서버에 outbound 연결하여 `claude.ai/code`에서 Full Claude Code UI를 제공. 로컬 포트 오픈 불필요.
 
 ### 13.3 Architecture
 
 ```
-Discord                     WebChatServer (port 3848)              ClaudePool
-  │                              │                                      │
-  ├── /rc ──────────────────► createToken() ──► ephemeral URL          │
-  │                              │                                      │
-  │                    ┌─────────┤ (브라우저 접속)                       │
-  │                    ▼         │                                      │
-  │              GET /rc         │                                      │
-  │              → 인라인 HTML   │                                      │
-  │              (marked.js CDN) │                                      │
-  │                    │         │                                      │
-  │              EventSource ──► GET /rc/stream (SSE 연결)              │
-  │                    │         │                                      │
-  │              POST /rc/send ──┤──────────────────────────► pool.run()│
-  │                              │                                      │
-  │                              │◄──── onData ─────────────────────────┤
-  │                              │  SSE: {type:"chunk", text:"..."}     │
-  │                              │                                      │
-  │                              │◄──── onApproval ─────────────────────┤
-  │                              │  SSE: {type:"approval", text:"..."}  │
-  │                              │                                      │
-  │              POST /rc/approve│                                      │
-  │                    ──────────┤──────────────────────► proc.approve()│
-  │                              │                                      │
-  │                              │◄──── onExit ─────────────────────────┤
-  │                              │  SSE: {type:"done"}                  │
+Discord                     SessionManager                    Claude CLI
+  │                              │                                │
+  ├── /rc ──────────────────► spawnRemoteControl()               │
+  │   (deferReply)               │                                │
+  │                              ├─ rc-bridge.py (PTY) ──────────►│
+  │                              │   claude remote-control        │
+  │                              │   --name "ProjectName"         │
+  │                              │                                │
+  │                              │◄── stdout URL 파싱 ────────────┤
+  │                              │   https://claude.ai/code/...   │
+  │  ◄── ephemeral URL 응답 ─────┤                                │
+  │                              │                                │
+  │                              │   rcProcesses Map에 저장        │
+  │                              │   (topicId → ChildProcess)     │
+  │                              │                                │
+  │  (브라우저/모바일 접속)        │                                │
+  │  claude.ai/code ─────────────┼── Anthropic 터널 ─────────────►│
+  │  Full Claude Code UI         │   (파일 편집, 도구, MCP 등)     │
+  │                              │                                │
+  │  /stop ──────────────────► proc.kill() + Map 삭제             │
 ```
 
-### 13.4 Routes
+### 13.4 PTY Bridge (rc-bridge.py)
 
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/rc?token=` | GET | 인라인 HTML 채팅 페이지 (모바일 최적화, 다크 테마) |
-| `/rc/send?token=` | POST | 메시지 전송 → Claude 실행. Body: `{"message":"..."}` |
-| `/rc/stream?token=` | GET | SSE 스트리밍 엔드포인트. EventSource로 연결 |
-| `/rc/approve?token=` | POST | 도구 승인/거부. Body: `{"decision":"approve"|"deny"}` |
+`claude remote-control`은 Ink/React 기반 TUI로, stdout이 TTY가 아니면 출력을 억제한다.
+Python PTY 브릿지(`scripts/rc-bridge.py`)가 PTY를 할당하여 TUI 출력을 Node.js pipe로 릴레이.
 
-### 13.5 Token Management
+- `claude-bridge.py`와 동일한 패턴이지만 더 단순: stdin relay 불필요 (RC는 웹 UI로 제어)
+- ANSI escape 코드 제거 후 URL regex 매칭
+- 30초 타임아웃 (URL 미출력 시 실패)
 
-- UUID v4 토큰, `Map<token, {topicId, userId, expiresAt}>`
-- 기본 TTL: 1시간 (`config.web.token_ttl`)
-- 만료 토큰 접근 시 401 반환 + 자동 삭제
-- Ephemeral Discord 응답 (본인만 URL 확인 가능)
+### 13.5 Process Lifecycle
 
-### 13.6 Design Choices
+1. `/rc` → `deferReply()` (spawn에 수초 소요)
+2. `spawnRemoteControl()` → `rc-bridge.py` → `claude remote-control`
+3. stdout에서 `https://claude.ai/code/...` URL 파싱
+4. `rcProcesses` Map에 저장 (topicId → ChildProcess)
+5. Ephemeral Discord 응답으로 URL 반환
+6. `exit` 이벤트 시 Map에서 자동 삭제
+7. `/stop` 또는 봇 shutdown 시 SIGTERM으로 정리
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| 프로토콜 | SSE (Server-Sent Events) | WebSocket 대비 단순, `ws` 의존성 불필요, EventSource 자동 재연결 |
-| HTML | 인라인 (서버 코드 내 문자열) | 별도 파일 서빙 불필요, 단일 파일 배포 |
-| 마크다운 | marked.js CDN | 클라이언트 사이드 렌더링, 서버 부담 없음 |
-| 인증 | URL 토큰 | 모바일에서 쿠키/헤더 설정 불편, URL 공유만으로 접속 가능 |
-| Claude 실행 | ClaudePool 재사용 | Discord 세션과 동일한 sessionId 공유 → 대화 연속성 |
+### 13.6 Web Chat Server (별도)
+
+WebChatServer (`src/web/server.ts`)는 여전히 포트 3848에서 동작하며 RC와 독립적이다.
+SSE 기반 웹 채팅 기능은 유지되지만, `/rc` 커맨드는 더 이상 웹 채팅 토큰을 생성하지 않는다.
 
 ---
 
@@ -592,3 +606,9 @@ Discord                     WebChatServer (port 3848)              ClaudePool
 | 웹 채팅 프로토콜 | SSE (Server-Sent Events) | WebSocket 대비 단순, `ws` 의존성 불필요, EventSource 자동 재연결 |
 | 웹 채팅 인증 | URL 기반 UUID 토큰 | 모바일 편의성 (URL 탭만으로 접속), ephemeral Discord 응답으로 보안 |
 | 웹 채팅 HTML | 인라인 문자열 | 파일 서빙 라우터 불필요, 단일 파일 배포, CDN marked.js로 마크다운 렌더링 |
+| Bridge stdin | PTY (Claude), DEVNULL (others) | Claude CLI가 `isTTY` 검사 — pipe stdin이면 `-p`에도 입력 대기. PTY로 isTTY=true 보장 |
+| Bridge exit | `os._exit()` (no `sys.stdin.close()`) | `relay_stdin` 스레드가 BufferedReader lock 보유 → `sys.stdin.close()` 호출 시 deadlock. `os._exit()`는 즉시 종료 |
+| Bridge stdout | Daemon thread + `proc.wait()` | CLI 자식 프로세스가 stdout pipe 상속 → blocking read 무한 대기. `proc.wait()`로 종료 감지 후 강제 종료 |
+| 메시지 대기열 | 최신 메시지만 처리 | Claude 실행 중 추가 메시지를 queue에 보관, 완료 후 가장 최신 메시지만 처리 (중간 것 폐기) |
+| `/rc` Remote Control | `claude remote-control` + PTY 브릿지 | SSE 웹 채팅 대신 Full Claude Code UI 제공. Anthropic 터널링으로 inbound 포트 불필요 |
+| RC PTY 브릿지 | `rc-bridge.py` (별도 스크립트) | `remote-control` TUI가 stdout TTY 검사 — pipe면 출력 억제. PTY로 TUI 출력을 Node.js로 릴레이 |
