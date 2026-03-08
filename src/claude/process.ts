@@ -89,6 +89,8 @@ export class ClaudeProcess extends EventEmitter {
     this.proc.on("exit", (code) => {
       console.log(`[${tag}] process exited code=${code}`);
       this.pid = null;
+      // Close stdin to unblock Python bridge's relay_stdin thread
+      this.proc?.stdin?.end();
       // Process remaining buffer
       if (this.buffer.trim()) {
         this.processLine(this.buffer.trim());

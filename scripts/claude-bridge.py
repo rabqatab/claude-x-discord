@@ -113,7 +113,11 @@ def main():
                 os.close(master_fd)
             except OSError:
                 pass
-        sys.exit(0)
+        try:
+            sys.stdin.close()
+        except Exception:
+            pass
+        os._exit(0)
     signal.signal(signal.SIGTERM, handle_signal)
 
     # Relay stdin from parent (Node.js) → PTY master → Claude CLI (approve/deny)
@@ -143,20 +147,43 @@ def main():
     stderr_thread = threading.Thread(target=read_stderr, daemon=True)
     stderr_thread.start()
 
-    # Stream stdout line by line
-    try:
-        for line in proc.stdout:
-            os.write(1, line)
-    except (BrokenPipeError, OSError):
-        pass
+    # Stream stdout in a daemon thread.
+    # Claude CLI may spawn child processes (agent teams, MCP servers) that
+    # inherit the stdout pipe.  When Claude exits but children linger, the
+    # pipe never gets EOF and a blocking read would hang forever.
+    # By reading in a daemon thread we can detect process exit via wait()
+    # and force-exit the bridge even if the pipe is still held open.
+    def read_stdout():
+        try:
+            for line in proc.stdout:
+                os.write(1, line)
+        except (BrokenPipeError, OSError):
+            pass
 
+    stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+    stdout_thread.start()
+
+    # Wait for the main CLI process to exit
     proc.wait()
+    # Give stdout a moment to drain any final data
+    stdout_thread.join(timeout=2.0)
+
     if master_fd is not None:
         try:
             os.close(master_fd)
         except OSError:
             pass
-    sys.exit(proc.returncode or 0)
+
+    # Close stdin to unblock the relay_stdin daemon thread before exit.
+    # Without this, the daemon thread holds a lock on the BufferedReader
+    # and Python's interpreter shutdown triggers a fatal error:
+    #   _enter_buffered_busy: could not acquire lock for <_io.BufferedReader name='<stdin>'>
+    try:
+        sys.stdin.close()
+    except Exception:
+        pass
+
+    os._exit(proc.returncode or 0)
 
 
 if __name__ == "__main__":
